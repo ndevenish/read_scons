@@ -84,19 +84,28 @@ def new_module(name, doc=None):
   sys.modules[name] = m
   return m
 
-def inject_script(module_path, globals={}):
+class InjectableModule(object):
   """Load and run a python script with an injected globals dictionary.
   This is to emulate what it appears libtbx/scons does to run refresh scripts
   """
-  path, module_filename = os.path.split(module_path)
-  module_name, ext = os.path.splitext(module_filename)
-  module = imp.new_module(module_name)
-  module.__file__ = module_path
-  vars(module).update(globals)
-  with open(module_path) as f:
-    exec(compile(f.read(), str(module_path), "exec"), vars(module))
-  return module
+  def __init__(self, module_path):
+    path, module_filename = os.path.split(module_path)
+    module_name, ext = os.path.splitext(module_filename)
+    module = imp.new_module(module_name)
+    module.__file__ = module_path
+    with open(module_path) as f:
+      self.bytecode = compile(f.read(), str(module_path), "exec")
+    self.module = module
 
+  def inject(self, globals):
+    vars(self.module).update(globals)
+
+  def execute(self):
+    exec(self.bytecode, vars(self.module))
+
+  def getvar(self, name):
+    return getattr(self.module, name)
+  
 class SConsConfigurationContext(object):
   def TryRun(self, code, **kwargs):
     if "__GNUC_PATCHLEVEL__" in code:
@@ -275,8 +284,8 @@ def _wrappedOpen(file, mode=None):
   # assert False, "Unknown Open; {}/{}".format(file, mode)
 
 class SconsBuilder(object):
-  def _env_export(self, *args):
-    self._to_export = args
+  def __init__(self):
+    self._exports = {}
 
   def parse_module(self, module):
     scons = os.path.join(module.path, "SConscript")
@@ -284,17 +293,27 @@ class SconsBuilder(object):
       print("No Sconscript for module {}".format(module.name))
       return
     print "Parsing {}".format(module.name)
+    # Build the object used to run the script
+    module = InjectableModule(scons)
 
     # Build the Scons injection environment
+    _to_export = set()
+    def _env_export(self, *args):
+      print "Exporting ", args
+      _to_export.update(set(args))
+
     inj = {
       "Environment": _generate_sconsbaseenv(self),
       "open": _wrappedOpen,
       "ARGUMENTS": {},
       "Builder": _SConsBuilder,
-      "Export": self._env_export
+      "Export": _env_export
     }
-    self._to_export = []
-    inject_script(scons, inj)
+    # Inject this and execute
+    module.inject(inj)
+    module.execute()
+    for name in _to_export:
+      self._exports[name] = module.getvar(name)
 
 
 class AttrDict(dict):
@@ -377,8 +396,8 @@ if __name__ == "__main__":
   # Find an order of processing
   node_order = nx.topological_sort(G, reverse=True)
 
-  import pdb
-  pdb.set_trace()
+  # import pdb
+  # pdb.set_trace()
 
   # Say what we found
   print("Found modules:")
