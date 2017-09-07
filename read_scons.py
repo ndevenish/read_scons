@@ -248,6 +248,9 @@ class SConsEnvironment(object):
     # clone.parent = self
     return clone
 
+  # Some parts rely on old APIs and were never updated
+  Copy = Clone
+
   def __setitem__(self, key, value):
     self.kwargs[key] = value
 
