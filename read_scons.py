@@ -14,51 +14,54 @@ import glob
 
 import networkx as nx
 
-# class TBXModuleFinder(object):
-#   ALL_POSSIBLE = {'amber_adaptbx', 'annlib', 'annlib_adaptbx', 'boost', 'boost_adaptbx', 
-#                   'cbflib', 'cbflib_adaptbx', 'ccp4io', 'ccp4io_adaptbx', 'cctbx', 
-#                   'chem_data', 'chiltbx', 'clipper', 'clipper_adaptbx', 'cma_es', 
-#                   'cootbx', 'crys3d', 'cudatbx', 'cxi_user', 'dials', 'dials_regression', 
-#                   'dox', 'dox.sphinx', 'dxtbx', 'elbow', 'fable', 'fftw3tbx', 
-#                   'gltbx', 'gui_resources', 'iota', 'iotbx', 'king', 'ksdssp', 
-#                   'labelit', 'libtbx', 'mmtbx', 'muscle', 'omptbx', 'opt_resources', 
-#                   'phaser', 'phaser_regression', 'phenix', 'phenix_examples', 
-#                   'phenix_html', 'phenix_regression', 'Plex', 'prime', 'probe', 
-#                   'pulchra', 'PyQuante', 'reduce', 'reel', 'rstbx', 'scitbx', 
-#                   'scons', 'simtbx', 'smtbx', 'solve_resolve', 'sphinx', 'spotfinder', 
-#                   'suitename', 'tbxx', 'tntbx', 'ucif', 'wxtbx', 'xfel', 'xia2', 
-#                   'xia2_regression'}
-
-#   def __init__(self):
-#     self._repositories = set()
-#     add_repository("cctbx_project")
-
-#   def add_repository(self, name):
-#     """Add the name of a folder that can contain other modules"""
-#     self._repositories.add(name)
-
-#   def find(self, basepath):
-#     """Find all modules from a base path. Returns a map of module name to relative path."""
-#     paths = {}
-#     for path, dirs, files in os.walk(basepath):
-#       for entry in dirs:
-#         if entry in self.ALL_POSSIBLE:
-
-#       if path == basepath:
-#         for entry in dirs:
-#           if not entry in self._repositories:
-#             dirs.remote(entry)
-#     for subdir in next(os.walk(basepath))[1]:
-#       if subdir in self.ALL_POSSIBLE:
-#         paths[subdir] = 
-#       is os.path.isdir(os.path.join(basepath, subdir))
-
+class AttrDict(dict):
+  """Object that can access dictionary elements as keys or attributes"""
+  def __init__(self, *args, **kwargs):
+    super(AttrDict, self).__init__(*args, **kwargs)
+    self.__dict__ = self
 
 def return_as_list(f):
-  """Decorated a function to convert a generator to a list"""
+  """Decorates a function to convert a generator to a list"""
   def _wrap(*args, **kwargs):
     return list(f(*args, **kwargs))
   return _wrap
+
+
+def new_module(name, doc=None):
+  """Create a new module and inject it into sys.modules.
+
+  :param name: Fully qualified name (including parent .)
+  :returns:  A module, injected into sys.modules
+  """
+  m = ModuleType(name, doc)
+  m.__file__ = name + '.py'
+  sys.modules[name] = m
+  return m
+
+class InjectableModule(object):
+  """Load and run a python script with an injected globals dictionary.
+  This is to emulate what it appears libtbx/scons does to run refresh scripts.
+  Allows injecting whilst the module is running e.g. via callbacks.
+  """
+  def __init__(self, module_path):
+    path, module_filename = os.path.split(module_path)
+    module_name, ext = os.path.splitext(module_filename)
+    module = imp.new_module(module_name)
+    module.__file__ = module_path
+    with open(module_path) as f:
+      self.bytecode = compile(f.read(), str(module_path), "exec")
+    self.module = module
+
+  def inject(self, globals):
+    vars(self.module).update(globals)
+
+  def execute(self):
+    exec(self.bytecode, vars(self.module))
+
+  def getvar(self, name):
+    """Return a variable from inside the module's globals"""
+    return getattr(self.module, name)
+
 
 class LibTBXModule(object):
   """Represents a libtbx module"""
@@ -91,7 +94,6 @@ class LibTBXModule(object):
   def has_config(self):
     return os.path.isfile(os.path.join(self.path, "libtbx_config"))
 
-
 @return_as_list
 def find_libtbx_modules(modulepath, repositories={"cctbx_project"}):
   """Find all modules in a path"""
@@ -107,52 +109,40 @@ def find_libtbx_modules(modulepath, repositories={"cctbx_project"}):
 
   # All subdirs == all modules, as far as libtbx logic goes. Filter them later.
   for dirname in subdirs:
-      name = os.path.basename(dirname)
-      path = dirname
-      yield LibTBXModule(name=name, path=path)
+    name = os.path.basename(dirname)
+    path = dirname
+    yield LibTBXModule(name=name, path=path)
 
-def new_module(name, doc=None):
-  """Create a new module and inject it into sys.modules.
+##############################################################################
+# SCons API Emulation
 
-  :param name: Fully qualified name (including parent .)
-  :returns:  A module, injected into sys.modules
-  """
-  m = ModuleType(name, doc)
-  m.__file__ = name + '.py'
-  sys.modules[name] = m
-  return m
+class ProgramReturn(object):
+  """Thin shim to represent the return from a Program builder.
 
-class InjectableModule(object):
-  """Load and run a python script with an injected globals dictionary.
-  This is to emulate what it appears libtbx/scons does to run refresh scripts
-  """
-  def __init__(self, module_path):
-    path, module_filename = os.path.split(module_path)
-    module_name, ext = os.path.splitext(module_filename)
-    module = imp.new_module(module_name)
-    module.__file__ = module_path
-    with open(module_path) as f:
-      self.bytecode = compile(f.read(), str(module_path), "exec")
-    self.module = module
-
-  def inject(self, globals):
-    vars(self.module).update(globals)
-
-  def execute(self):
-    exec(self.bytecode, vars(self.module))
-
-  def getvar(self, name):
-    return getattr(self.module, name)
-
+  AFAICT this is only used once in the SConscripts, to find out the
+  location of a target that has just been built, so doesn't need to be
+  any more complicated than this."""
+  def __init__(self, path):
+    self.path = path
+  def get_abspath(self):
+    return self.path
 
 class SConsConfigurationContext(object):
+  """Represents the object returned by a Scons Environment's 'Configure'.
+
+  This is used to run tests inside a configured environment to e.g. test if
+  sample programs will compile and run with the environment configured in a
+  certain way. Here we just short-circuit the answers by working out what parts
+  of the code is doing the testing.
+  """
+
   def __init__(self, env):
     self.env = env
 
-  """Represents the object returned by a Scons Environment's 'Configure'"""
   def TryRun(self, code, **kwargs):
     if "__GNUC_PATCHLEVEL__" in code:
-      # We are trying to extract compiler information. Just return constant.
+      # We are trying to extract compiler information. Just return constant and
+      # we can change it later if this fucks up something.
       data = {"llvm":1, "clang":1, "clang_major":8, "clang_minor":1, 
               "clang_patchlevel":0, "GNUC":4, "GNUC_MINOR":2, 
               "GNUC_PATCHLEVEL":1, "clang_version": "8.1.0 (clang-802.0.42)", 
@@ -164,16 +154,21 @@ class SConsConfigurationContext(object):
     # Yes, openMP works as far as libtbx configuration is concerned
     if caller == "enable_openmp_if_possible":
       return (1,"e=2.71828, pi=3.14159")
+    # This writes out a file with information on size type equivalence.
     if caller == "write_type_id_eq_h":
       # This is what the mac returns, but we handle this already anyway
       return (1, "0010")
-    # Covers both basic tests for gltbx
+    # Tests to see if we can include the openGL headers
     if "gltbx/include_opengl.h" in code:
       return (1, "6912")
 
     assert False, "Unable to determine purpose of TryRun"
 
   def TryCompile(self, code, **kwargs):
+    # This tests something to do with an old boost/clang bug apparently.
+    # Assume this is long past and we no longer need the workaround. (certainly
+    # anyone using clang is probably using something much more modern than our
+    # average supported GCC installation)
     if code == """\
       #include <boost/thread.hpp>
 
@@ -184,108 +179,111 @@ class SConsConfigurationContext(object):
       }
       """:
       return 1
+    # This appears.... to test that a compiler actually works.
     elif code == "#include <iostream>":
       return 1
+    # Is Python available?
     elif code == "#include <Python.h>":
       return 1
+    # A second check of openGL inclusion
     elif code.strip() == "#include <gltbx/include_opengl.h>":
       return 1
+    # Looks to see if the fftw3 library is importable
     elif code == "#include <fftw3.h>":
       return 1
 
     assert False, "Not recognised TryCompile"
 
   def Finish(self):
+    """Closes a configuration context. Nullop here."""
     pass
 
-class ProgramReturn(object):
-  def __init__(self, path):
-    self.path = path
-  def get_abspath(self):
-    return self.path
+class SConsEnvironment(object):
+  """Represents an object created by the scons Environment() call.
 
-def _generate_sconsbaseenv(running_within):
-  class _SconsEnvironment(object):
-    _instances = []
-    runner = running_within
-    def __init__(self, *args, **kwargs):
-      self._instances.append(self)
-      self.parent = None
-      self.args = args
-      defaults = {
-        "OBJSUFFIX": ".o",
-        "SHLINKFLAGS": [],
-        "BUILDERS": {},
-        "SHLINKCOM": ["SHLINKCOMDEFAULT"],
-        "LINKCOM": ["LINKCOMDEFAULT"],
-        "CCFLAGS": [],
-        "SHCCFLAGS": [],
-        "CXXFLAGS": [],
-        "SHCXXFLAGS": [],
-        "PROGPREFIX": "",
-        "PROGSUFFIX": "",
-      }
-      defaults.update(kwargs)
-      self.kwargs = defaults
+  Needs to be constructed separately so that it can be tracked by the
+  SCons-emulation environment.
+  """
+  _DEFAULT_KWARGS = {
+    "OBJSUFFIX": ".o",
+    "SHLINKFLAGS": [],
+    "BUILDERS": {},
+    "SHLINKCOM": ["SHLINKCOMDEFAULT"],
+    "LINKCOM": ["LINKCOMDEFAULT"],
+    "CCFLAGS": [],
+    "SHCCFLAGS": [],
+    "CXXFLAGS": [],
+    "SHCXXFLAGS": [],
+    "PROGPREFIX": "",
+    "PROGSUFFIX": "",
+  }
 
+  def __init__(self, emulator_environment, *args, **kwargs):
+    self.runner = emulator_environment
+    # self.parent = None
+    self.args = args
+    self.kwargs = kwargs
 
-    def Append(self, **kwargs):
-      for key, val in kwargs.items():
-        if not key in self.kwargs:
-          self.kwargs[key] = []
-        self.kwargs[key].extend(val)
+  def Append(self, **kwargs):
+    for key, val in kwargs.items():
+      if not key in self.kwargs:
+        self.kwargs[key] = []
+      self.kwargs[key].extend(val)
 
-    def Prepend(self, **kwargs):
-      for key, val in kwargs.items():
-        if not key in self.kwargs:
-          self.kwargs[key] = []
-        self.kwargs[key][:0] = val
+  def Prepend(self, **kwargs):
+    for key, val in kwargs.items():
+      if not key in self.kwargs:
+        self.kwargs[key] = []
+      self.kwargs[key][:0] = val
 
-    def Replace(self, **kwargs):
-      self.kwargs.update(kwargs)
+  def Replace(self, **kwargs):
+    self.kwargs.update(kwargs)
 
-    def Configure(self):
-      return SConsConfigurationContext(self)
+  def Configure(self):
+    return SConsConfigurationContext(self)
 
-    def Clone(self, **kwargs):
-      clone = type(self)()
-      clone.parent = self
-      clone.kwargs.update(kwargs)
-      return clone
+  def Clone(self, **kwargs):
+    clone = type(self)(self.runner, **self.kwargs)
+    clone.kwargs.update(kwargs)
+    # clone.parent = self
+    return clone
 
-    def __setitem__(self, key, value):
-      self.kwargs[key] = value
+  def __setitem__(self, key, value):
+    self.kwargs[key] = value
 
-    def __getitem__(self, key):
-      return self.kwargs[key]
+  def __getitem__(self, key):
+    # Check the defaults first, so we only write to kwargs what isn't explicit
+    if not key in self.kwargs:
+      return self._DEFAULT_KWARGS[key]
+    return self.kwargs[key]
 
-    def SharedLibrary(self, target, source, **kwargs):
-      print("Shared lib: {} (relative to {})\n     sources: {}".format(target, self.runner._current_sconscript, source))
+  def Repository(self, path):
+    if path == "DISTPATH":
+      return
+    assert False, "Unknown Repository usage: {}".format(path)
 
-    def StaticLibrary(self, target, source, **kwargs):
-      print("Static lib: {} (relative to {})\n     sources: {}".format(target, self.runner._current_sconscript, source))
+  def SConscript(self, name, exports=None):
+    """Sometimes, sub-SConscripts are called from an environment. Appears to behave the same."""
+    self.runner.sconscript_command(name, exports)
 
-    def Program(self, target, source):
-      print("Program: {} (relative to {})\n     sources: {}".format(target, self.runner._current_sconscript, source))
-      # Used at least once
-      return [ProgramReturn(target)]
+  def SharedLibrary(self, target, source, **kwargs):
+    print("Shared lib: {} (relative to {})\n     sources: {}".format(target, self.runner._current_sconscript, source))
 
-    def cudaSharedLibrary(self, target, source):
-      print("CUDA program: {}, {}".format(target, source))
+  def StaticLibrary(self, target, source, **kwargs):
+    print("Static lib: {} (relative to {})\n     sources: {}".format(target, self.runner._current_sconscript, source))
 
-    def SharedObject(self,source):
-      print("Shared object: {}".format(source))
-      return ["SHAREDOBJECT", source]
+  def Program(self, target, source):
+    print("Program: {} (relative to {})\n     sources: {}".format(target, self.runner._current_sconscript, source))
+    # Used at least once
+    return [ProgramReturn(target)]
 
-    def Repository(self, path):
-      if path == "DISTPATH":
-        return
-      assert False, "Unknown Repository usage: {}".format(path)
+  def cudaSharedLibrary(self, target, source):
+    print("CUDA program: {}, {}".format(target, source))
 
-    def SConscript(self, name, exports=None):
-      self.runner.sconscript_command(name, exports)
+  def SharedObject(self,source):
+    print("Shared object: {}".format(source))
+    return ["SHAREDOBJECT", source]
 
-  return _SconsEnvironment
 
 class FakePath(object):
   pass
@@ -308,9 +306,6 @@ class UnderBase(FakePath):
   def find(self, substr):
     return self.path.find(substr)
 
-# class PythonIncludePath(FakePath):
-#   def split(self, *args):
-#     return ["PYTHONINCLUDEPATH"]
 
 class libtbxBuildOptions(object):
   build_boost_python_extensions = True
@@ -427,7 +422,7 @@ def _wrappedOpen(file, mode=None):
   return _fakeFile(file)
   # assert False, "Unknown Open; {}/{}".format(file, mode)
 
-class SconsBuilder(object):
+class SconsEmulator(object):
   def __init__(self, dist, modules):
     self._exports = {}
     self._current_sconscript = None
@@ -473,8 +468,11 @@ class SconsBuilder(object):
       results = glob.glob(globpath)
       return results
 
+    def _new_env(*args, **kwargs):
+      return SConsEnvironment(self, *args, **kwargs)
+
     inj = {
-      "Environment": _generate_sconsbaseenv(self),
+      "Environment": _new_env,
       "open": _wrappedOpen,
       "ARGUMENTS": {},
       "Builder": _SConsBuilder,
@@ -483,18 +481,23 @@ class SconsBuilder(object):
       "SConscript": self.sconscript_command,
       "Glob": _env_glob,
     }
-    # Inject this and execute
+    # Inject this
     module.inject(inj)
     # Handle the stack of Sconscript processing
     prev_scons = self._current_sconscript
     self._current_sconscript = filename
+    # Now execute the script
     module.execute()
     self._current_sconscript = prev_scons
 
-class AttrDict(dict):
-  def __init__(self, *args, **kwargs):
-    super(AttrDict, self).__init__(*args, **kwargs)
-    self.__dict__ = self
+##############################################################################
+# Create the fake import-environment so we don't need external modules
+
+# Common functions
+def _fail(*args, **kwargs):
+  raise NotImplementedError("Not Implemented")
+def _wtf(*args, **kwargs):
+  assert False, "WTF? {}, {}".format(args, kwargs)
 
 # Create the libtbx environment
 libtbx = new_module("libtbx")
@@ -503,29 +506,33 @@ libtbx.env_config = new_module("libtbx.env_config")
 libtbx.utils = new_module("libtbx.utils")
 libtbx.str_utils = new_module("libtbx.str_utils")
 libtbx.path = new_module("libtbx.path")
-# open(libtbx.env.under_build("include_paths"), "w")
 
-# Functions
-def _fail(*args, **kwargs):
-  raise NotImplementedError("Not Implemented")
-def _wtf(*args, **kwargs):
-  assert False, "WTF? {}, {}".format(args, kwargs)
 def _unique_paths(paths):
   return list(set(paths))
-# def _tbx_norm_join(a, b):
-#   return 
-libtbx.easy_run = libtbxEasyRun()
+
+libtbx.manual_date_stamp = 20090819 # I don't even
 libtbx.utils.getenv_bool = _fail
 libtbx.str_utils.show_string = _fail
 libtbx.path.norm_join = lambda a,b: os.path.normpath(os.path.join(a,b))
 libtbx.path.full_command_path = _fail
 libtbx.group_args = AttrDict
+
+# Don't understand the purpose or intent of this functions, but seems 
+# mostly ignorable without damage.
+def _tbx_darwin_shlinkcom(env_etc, env, lo, dylib):
+  if "libboost_thread.lo" in lo:
+    return
+  if "libboost_python.lo" in lo:
+    return
+  _wtf(env_etc, env, lo, dylib)
+
 libtbx.env_config.include_registry = libtbxIncludeRegistry
 libtbx.env_config.is_64bit_architecture = lambda: True
 libtbx.env_config.python_include_path = lambda: "PYTHON/INCLUDE/PATH"
 libtbx.env_config.unique_paths = _unique_paths
+libtbx.env_config.darwin_shlinkcom = _tbx_darwin_shlinkcom
 
-# Too complex to try shortcutting; just fall through where used
+# Too complex to try shortcutting the test; just replicate and catch results
 def _libtbx_select_matching(key, choices, default=None):
   for key_pattern, value in choices:
     m = re.search(key_pattern, key)
@@ -535,24 +542,14 @@ libtbx.utils.select_matching = _libtbx_select_matching
 libtbx.utils.warn_if_unexpected_md5_hexdigest = Mock()
 libtbx.utils.write_this_is_auto_generated =  Mock()
 
-def _tbx_darwin_shlinkcom(env_etc, env, lo, dylib):
-  "Very vague ideas about what this is any why it's used"
-  if "libboost_thread.lo" in lo:
-    return
-  if "libboost_python.lo" in lo:
-    return
-  _wtf(env_etc, env, lo, dylib)
-
-libtbx.env_config.darwin_shlinkcom = _tbx_darwin_shlinkcom
-
 libtbx.env = libtbxEnv()
-libtbx.manual_date_stamp = 20090819 # I don't even
+libtbx.easy_run = libtbxEasyRun()
 
 # data module used during it's sconscript
 fftw3tbx = new_module("fftw3tbx")
 fftw3tbx.fftw3_h = "fftw3.h"
 
-# Fake anything SCons that we interact with
+# Occasionally we access some SCons API to do... something
 SCons = new_module("SCons")
 SCons.Action = new_module("SCons.Action")
 SCons.Scanner = new_module("SCons.Scanner")
@@ -561,21 +558,16 @@ SCons.Scanner.C = new_module("SCons.Scanner.C")
 SCons.Action.FunctionAction = Mock()
 SCons.Scanner.C.CScanner = Mock()
 
-if __name__ == "__main__":
-  MODULE_PATH = "."
-  modules = find_libtbx_modules(MODULE_PATH)
+##############################################################################
+# __main__ handling and setup functionality
 
-  # Make a lookup to find modules by name
-  modulemap = {x.name: x for x in modules}
-
+def _build_dependency_graph(modules):
+  """Builds a networkX dependency graph out of the module self-reported requirements"""
   G = nx.DiGraph()
   G.add_nodes_from(modulemap.keys())
 
   # Build the dependency graph from the libtbx information
   for module in modules:
-    # modulemap[module.name] = module
-
-    # G.add_node(module.name)
     for req in module.required:
       G.add_edge(module.name, req)
     
@@ -583,30 +575,31 @@ if __name__ == "__main__":
     if not module.name == "libtbx":
       G.add_edge(module.name, "libtbx")
 
+    # Check that we know about all the dependencies, and warn if we don't
     reqs = {x for x in modules if x.name in module.required}
     if len(reqs) < len(module.required):
       print("{} has missing dependency: {}".format(module.name, module.required - {x.name for x in reqs}))
-    # # Add 
-    # for dep in reqs:
-    #   dep.required_by.add(module)
-    # module.required = reqs
-
 
   # Custom edges to fix problems - not sure how order is determined without this
   G.add_edge("scitbx", "omptbx")
 
-  try:
-    cycle = nx.cycles.find_cycle(G)
-  except nx.NetworkXNoCycle:
-    pass
-  else:
-    raise RuntimeError("Cycles found in dependency graph: {}".format(cycle))
+  # Validate we don't have any cycles
+  assert nx.is_directed_acyclic_graph(G), "Cycles found in dependency graph: {}".format(nx.cycles.find_cycle(G))
 
+  return G
+
+if __name__ == "__main__":
+
+  MODULE_PATH = "."
+  modules = find_libtbx_modules(MODULE_PATH)
+
+  # Make a lookup to find modules by name
+  modulemap = {x.name: x for x in modules}
+
+  G = _build_dependency_graph(modules)
   # Find an order of processing that satisfies dependencies
   node_order = nx.topological_sort(G, reverse=True, nbunch=sorted(G.nodes()))
-  print "Import order: ", node_order
-  # import pdb
-  # pdb.set_trace()
+  print "Dependency processing order: ", node_order
 
   # Say what we found
   print("Found modules (excluding modules without SConscripts):")
@@ -616,7 +609,7 @@ if __name__ == "__main__":
       print("  {}  {}".format(module.name.ljust(maxl), module.path))
 
   # Contain the continuing scons environment we are building
-  scons = SconsBuilder(dist=MODULE_PATH, modules=modulemap)
+  scons = SconsEmulator(dist=MODULE_PATH, modules=modulemap)
 
   # Process modules (with SConscripts) in dependency order
   for module in [modulemap[x] for x in node_order if x in modulemap and modulemap[x].has_sconscript]:
