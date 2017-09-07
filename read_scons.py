@@ -11,7 +11,7 @@ import re
 import inspect
 import json
 import glob
-
+from enum import Enum
 import networkx as nx
 
 class AttrDict(dict):
@@ -198,6 +198,38 @@ class SConsConfigurationContext(object):
     """Closes a configuration context. Nullop here."""
     pass
 
+class SharedObject(object):
+  def __init__(self, path, environment):
+    self.path = path
+    self.environment = environment
+  def __repr__(self):
+    return "<SharedObject {}>".format(self.path)
+  def __iter__(self):
+    return iter([self.path])
+
+class Target(object):
+  class Type(Enum):
+    PROGRAM = "Program"
+    SHARED  = "Shared"
+    STATIC  = "Static"
+
+  def __init__(self, targettype, output_name, sources):
+    assert targettype in self.Type
+    self.type = targettype
+    self.output_name = output_name
+    self.sources = [x for x in sources if not isinstance(x, SharedObject)]
+    self.shared_sources = [x for x in sources if isinstance(x, SharedObject)]
+
+  def __str__(self):
+    out = ""
+    out += "{} Target:\n".format(self.type.value)
+    out += "   Output:  {}\n".format(self.output_name)
+    out += "   Sources: {}\n".format(", ".join(self.sources))
+    if self.shared_sources:
+      out += "   SharedObjects: {}\n".format(self.shared_sources)
+      
+    return out.strip()
+
 class SConsEnvironment(object):
   """Represents an object created by the scons Environment() call.
 
@@ -269,14 +301,27 @@ class SConsEnvironment(object):
     """Sometimes, sub-SConscripts are called from an environment. Appears to behave the same."""
     self.runner.sconscript_command(name, exports)
 
+  def _create_target(self, targettype, target, source, **kwargs):
+    if isinstance(source, basestring):
+      source = [source]
+    target = Target(targettype, output_name=target, sources=source)
+    print(str(target))
+    return target
+
   def SharedLibrary(self, target, source, **kwargs):
-    print("Shared lib: {} (relative to {})\n     sources: {}".format(target, self.runner._current_sconscript, source))
+    self._create_target(Target.Type.SHARED, target, source, **kwargs)
+
+    # Target(Target.Type.SHARED, environment=self, output_name=target, sources=source, **kwargs)
+    # print("Shared lib: {} (relative to {})\n     sources: {}".format(target, self.runner._current_sconscript, source))
 
   def StaticLibrary(self, target, source, **kwargs):
-    print("Static lib: {} (relative to {})\n     sources: {}".format(target, self.runner._current_sconscript, source))
+    self._create_target(Target.Type.STATIC, target, source, **kwargs)
+
+    # print("Static lib: {} (relative to {})\n     sources: {}".format(target, self.runner._current_sconscript, source))
 
   def Program(self, target, source):
-    print("Program: {} (relative to {})\n     sources: {}".format(target, self.runner._current_sconscript, source))
+    self._create_target(Target.Type.PROGRAM, target, source)
+    # print("Program: {} (relative to {})\n     sources: {}".format(target, self.runner._current_sconscript, source))
     # Used at least once
     return [ProgramReturn(target)]
 
@@ -285,7 +330,7 @@ class SConsEnvironment(object):
 
   def SharedObject(self,source):
     print("Shared object: {}".format(source))
-    return ["SHAREDOBJECT", source]
+    return SharedObject(source, self)
 
 
 class FakePath(object):
