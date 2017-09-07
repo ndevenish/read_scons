@@ -3,7 +3,7 @@
 
 import os
 import sys
-from collections import namedtuple
+from collections import namedtuple, Counter, defaultdict
 from types import ModuleType
 import imp
 from mock import Mock
@@ -13,6 +13,7 @@ import json
 import itertools
 import glob
 import copy
+import yaml
 from enum import Enum
 import networkx as nx
 
@@ -216,12 +217,15 @@ class Target(object):
     PROGRAM = "Program"
     SHARED  = "Shared"
     STATIC  = "Static"
+    MODULE  = "Module"
+    CUDALIB = "CUDALib"
 
   def __init__(self, targettype, output_name, sources):
     assert targettype in self.Type
     self.type = targettype
     
     self.name = os.path.basename(output_name)
+    self.filename = self.name
     self.output_path = os.path.dirname(output_name)
 
     # self.output_name = output_name
@@ -232,10 +236,11 @@ class Target(object):
     self.prefix = ""
     # The path the target was "created" from
     self.origin_path = ""
+    self.tbxmodule = None
 
   @property
   def output_filename(self):
-    return self.prefix + self.name
+    return self.prefix + self.filename
 
   def __str__(self):
     out = ""
@@ -248,6 +253,8 @@ class Target(object):
     if self.extra_libs:
       out += "   Libs: {}\n".format(", ".join(self.extra_libs))
     out += "   Origin: {}\n".format(self.origin_path)
+    if self.tbxmodule:
+      out += "   Module: {}\n".format(self.tbxmodule)
       
     return out.strip()
 
@@ -340,6 +347,8 @@ class SConsEnvironment(object):
   def _create_target(self, targettype, target, source, **kwargs):
     if isinstance(source, basestring):
       source = [source]
+    if target.startswith("#lib"):
+      target = "#/lib" + target[4:]
     target = Target(targettype, output_name=target, sources=source)
     target.origin_path = os.path.dirname(self.runner._current_sconscript)
 
@@ -366,6 +375,7 @@ class SConsEnvironment(object):
     elif targettype == Target.Type.STATIC:
       target.prefix = self["LIBPREFIX"]
 
+    target.tbxmodule = self.runner._current_module
     print(str(target))
 
     self.runner.targets.append(target)
@@ -389,7 +399,8 @@ class SConsEnvironment(object):
     return [ProgramReturn(target)]
 
   def cudaSharedLibrary(self, target, source):
-    print("CUDA program: {}, {}".format(target, source))
+    target = self._create_target(Target.Type.CUDALIB, target, source)
+    # print("CUDA program: {}, {}".format(target, source))
 
   def SharedObject(self,source):
     print("Shared object: {}".format(source))
@@ -537,6 +548,7 @@ class SconsEmulator(object):
   def __init__(self, dist, modules):
     self._exports = {}
     self._current_sconscript = None
+    self._current_module = None
 
     self.dist_path = dist
     self.module_map = modules
@@ -544,6 +556,7 @@ class SconsEmulator(object):
     self.targets = []
 
   def parse_module(self, module):
+    self._current_module = module
     scons = os.path.join(module.path, "SConscript")
     if not os.path.isfile(scons):
       print("No Sconscript for module {}".format(module.name))
@@ -702,6 +715,17 @@ def _build_dependency_graph(modules):
 
   return G
 
+def deduplicate_names(targets):
+  "Takes a list of targets and fixes names to avoid duplicates"
+  namecount = Counter([x.name for x in targets])
+  for duplicate in [x for x in namecount.keys() if namecount[x] > 1]:
+    duped = [x for x in targets if x.name == duplicate]
+    modules = set(x.tbxmodule for x in duped)
+    assert len(modules) == len(duped), "Module name not enough to disambiguate duplicate targets named {} (in {})".format(duplicate, modules)
+    for target in duped:
+      target.name = "{}_{}".format(target.name, target.tbxmodule)
+  assert all([x == 1 for _, x in Counter([x.name for x in targets]).items()]), "Deduplication failed"
+
 if __name__ == "__main__":
 
   MODULE_PATH = "."
@@ -732,6 +756,64 @@ if __name__ == "__main__":
   print("Processing of SConscripts done.")
   print("{} Targets recognised".format(len(scons.targets)))
 
-  all_libs = set(itertools.chain(*[x.extra_libs for x in scons.targets]))
+  targets = scons.targets
+
+  # Remove any boost libraries that might be explicitly compiled
+  remove_boost = {"boost_thread", "boost_system", "boost_python", "boost_chrono"}
+  for boost in remove_boost:
+    tgt = [x for x in targets if x.name == boost]
+    for t in tgt:
+      print("Removing target {}".format(t.name))
+      targets.remove(t)
+
+  # Remove clipper and clipper_adaptbx because not sure how SCons resolves paths
+  # e.g. clipper adaptbx says "../clipper/<x>" but that's in cctbx_project and so
+  # an invalid path reference, but SCons finds it.
+  remove_mods = {"clipper", "clipper_adaptbx"}
+  for mod in remove_mods:
+    tgts = [x for x in targets if x.tbxmodule.name == mod]
+    for t in tgts:
+      print("Removing target {} (removing {})".format(t.name, mod))
+      targets.remove(t)
+
+  all_libs = set(itertools.chain(*[x.extra_libs for x in targets]))
   print "All linked libraries: ", all_libs
-  print "All external (w/o known like boost): ", all_libs - {x.name for x in scons.targets}
+  print "All external (w/o known like boost): ", all_libs - {x.name for x in targets}
+
+  # Fix any duplicated target names
+  deduplicate_names(targets)
+
+  # Find the python-module targets and change their target type
+  for target in targets:
+    if target.boost_python and not target.prefix:
+      target.type = Target.Type.MODULE
+
+
+  # Check assumptions about libraries
+  assert all(x.tbxmodule for x in targets)
+  assert all(x.prefix == "lib" for x in targets if x.type == Target.Type.SHARED)
+  assert all(x.prefix == "lib" for x in targets if x.type == Target.Type.STATIC)
+  assert all(x.prefix == "" for x in targets if x.type == Target.Type.MODULE)
+  # Can't: Not all python libraries end up in lib
+  # assert all(x.output_path == "#/lib" for x in targets if x.type == Target.Type.MODULE)
+  
+  # Build an export dictionary
+  module_data = defaultdict(list)
+  target_data = []
+  for target in targets:
+    tdict = {
+      "name": target.name,
+      "type": target.type.value,
+      "origin": target.origin_path,
+      "sources": target.sources,
+    }
+    if target.filename != target.name:
+      tdict["filename"] = target.filename
+    if target.output_path != "#/lib":
+      tdict["output_path"] = target.output_path
+
+    module_data[target.tbxmodule.name].append(tdict)
+    # target_data.append(tdict)
+  import code
+  code.interact(local=locals())
+
