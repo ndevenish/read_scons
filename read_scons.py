@@ -11,6 +11,7 @@ import re
 import inspect
 import json
 import glob
+import copy
 from enum import Enum
 import networkx as nx
 
@@ -254,7 +255,12 @@ class SConsEnvironment(object):
     self.runner = emulator_environment
     # self.parent = None
     self.args = args
-    self.kwargs = kwargs
+    self.kwargs = copy.deepcopy(kwargs)
+    for key in self.kwargs:
+      self._update(key)
+
+  def _update(self, key):
+    pass
 
   def Append(self, **kwargs):
     for key, val in kwargs.items():
