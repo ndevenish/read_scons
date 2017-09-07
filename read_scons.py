@@ -211,7 +211,7 @@ class SharedObject(object):
     return iter([self.path])
 
 class Target(object):
-  """Represents an output target"""
+  """Represents an output target, extracted information independent of SCons"""
   class Type(Enum):
     PROGRAM = "Program"
     SHARED  = "Shared"
