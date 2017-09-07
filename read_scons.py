@@ -10,6 +10,7 @@ from mock import Mock
 import re
 import inspect
 import json
+import itertools
 import glob
 import copy
 from enum import Enum
@@ -200,6 +201,7 @@ class SConsConfigurationContext(object):
     pass
 
 class SharedObject(object):
+  "Represents a shared object file that is compiled once and shared"
   def __init__(self, path, environment):
     self.path = path
     self.environment = environment
@@ -209,6 +211,7 @@ class SharedObject(object):
     return iter([self.path])
 
 class Target(object):
+  """Represents an output target"""
   class Type(Enum):
     PROGRAM = "Program"
     SHARED  = "Shared"
@@ -217,17 +220,34 @@ class Target(object):
   def __init__(self, targettype, output_name, sources):
     assert targettype in self.Type
     self.type = targettype
-    self.output_name = output_name
+    
+    self.name = os.path.basename(output_name)
+    self.output_path = os.path.dirname(output_name)
+
+    # self.output_name = output_name
     self.sources = [x for x in sources if not isinstance(x, SharedObject)]
     self.shared_sources = [x for x in sources if isinstance(x, SharedObject)]
+    self.boost_python = False
+    self.extra_libs = set()
+    self.prefix = ""
+    # The path the target was "created" from
+    self.origin_path = ""
+
+  @property
+  def output_filename(self):
+    return self.prefix + self.name
 
   def __str__(self):
     out = ""
-    out += "{} Target:\n".format(self.type.value)
-    out += "   Output:  {}\n".format(self.output_name)
+    out += "{} Target {}:\n".format(self.type.value, self.name)
+    out += "   Output:  {}\n".format(os.path.join(self.output_path, self.output_filename))
     out += "   Sources: {}\n".format(", ".join(self.sources))
     if self.shared_sources:
       out += "   SharedObjects: {}\n".format(self.shared_sources)
+    out += "   Boost-Python: {}\n".format(self.boost_python)
+    if self.extra_libs:
+      out += "   Libs: {}\n".format(", ".join(self.extra_libs))
+    out += "   Origin: {}\n".format(self.origin_path)
       
     return out.strip()
 
@@ -249,6 +269,9 @@ class SConsEnvironment(object):
     "SHCXXFLAGS": [],
     "PROGPREFIX": "",
     "PROGSUFFIX": "",
+    "LIBPREFIX": "lib",
+    "SHLIBPREFIX": "lib",
+    "LIBS": []
   }
 
   def __init__(self, emulator_environment, *args, **kwargs):
@@ -264,15 +287,21 @@ class SConsEnvironment(object):
 
   def Append(self, **kwargs):
     for key, val in kwargs.items():
+      if isinstance(val, basestring):
+        val = [val]
       if not key in self.kwargs:
         self.kwargs[key] = []
       self.kwargs[key].extend(val)
+      self._update(key)
 
   def Prepend(self, **kwargs):
     for key, val in kwargs.items():
+      if isinstance(val, basestring):
+        val = [val]
       if not key in self.kwargs:
         self.kwargs[key] = []
       self.kwargs[key][:0] = val
+      self._update(key)
 
   def Replace(self, **kwargs):
     self.kwargs.update(kwargs)
@@ -291,6 +320,7 @@ class SConsEnvironment(object):
 
   def __setitem__(self, key, value):
     self.kwargs[key] = value
+    self._update(key)
 
   def __getitem__(self, key):
     # Check the defaults first, so we only write to kwargs what isn't explicit
@@ -311,7 +341,34 @@ class SConsEnvironment(object):
     if isinstance(source, basestring):
       source = [source]
     target = Target(targettype, output_name=target, sources=source)
+    target.origin_path = os.path.dirname(self.runner._current_sconscript)
+
+    # Massage lib list to flatten any odd sublists etc
+    libs = set()
+    for lib in self["LIBS"]:
+      if isinstance(lib, basestring):
+        libs.add(lib)
+      elif isinstance(lib, list):
+        libs |= set(lib)
+      else:
+        assert False
+
+    # Now let's filter/reduce the libs set. We know:
+    # - Everything gets boost_thread, boost_system if threading is available, so no special required.
+    # - Everything gets lm in SCons, unnecessary to track as universal (and automatic in clang?)
+    libs -= {"boost_thread", "boost_system", "m"}
+    target.boost_python = "boost_python" in libs
+    libs -= {"boost_python"}
+    target.extra_libs = libs
+
+    if targettype == Target.Type.SHARED:
+      target.prefix = self["SHLIBPREFIX"]
+    elif targettype == Target.Type.STATIC:
+      target.prefix = self["LIBPREFIX"]
+
     print(str(target))
+
+    self.runner.targets.append(target)
     return target
 
   def SharedLibrary(self, target, source, **kwargs):
@@ -484,6 +541,8 @@ class SconsEmulator(object):
     self.dist_path = dist
     self.module_map = modules
 
+    self.targets = []
+
   def parse_module(self, module):
     scons = os.path.join(module.path, "SConscript")
     if not os.path.isfile(scons):
@@ -520,7 +579,8 @@ class SconsEmulator(object):
     def _env_glob(path):
       globpath = os.path.join(os.path.dirname(filename), path)
       results = glob.glob(globpath)
-      return results
+      ldir = len(os.path.dirname(filename))
+      return [x[ldir+1:] for x in results]
 
     def _new_env(*args, **kwargs):
       return SConsEnvironment(self, *args, **kwargs)
@@ -668,3 +728,10 @@ if __name__ == "__main__":
   # Process modules (with SConscripts) in dependency order
   for module in [modulemap[x] for x in node_order if x in modulemap and modulemap[x].has_sconscript]:
     scons.parse_module(module)
+
+  print("Processing of SConscripts done.")
+  print("{} Targets recognised".format(len(scons.targets)))
+
+  all_libs = set(itertools.chain(*[x.extra_libs for x in scons.targets]))
+  print "All linked libraries: ", all_libs
+  print "All external (w/o known like boost): ", all_libs - {x.name for x in scons.targets}
