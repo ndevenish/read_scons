@@ -1,0 +1,409 @@
+# coding: utf-8
+
+import os
+import inspect
+import copy
+import glob
+
+from enum import Enum
+
+from .utils import InjectableModule
+from .import_env import do_import_patching
+
+class ProgramReturn(object):
+  """Thin shim to represent the return from a Program builder.
+
+  AFAICT this is only used once in the SConscripts, to find out the
+  location of a target that has just been built, so doesn't need to be
+  any more complicated than this."""
+  def __init__(self, path):
+    self.path = path
+  def get_abspath(self):
+    return self.path
+
+class SConsConfigurationContext(object):
+  """Represents the object returned by a Scons Environment's 'Configure'.
+
+  This is used to run tests inside a configured environment to e.g. test if
+  sample programs will compile and run with the environment configured in a
+  certain way. Here we just short-circuit the answers by working out what parts
+  of the code is doing the testing.
+  """
+
+  def __init__(self, env):
+    self.env = env
+
+  def TryRun(self, code, **kwargs):
+    if "__GNUC_PATCHLEVEL__" in code:
+      # We are trying to extract compiler information. Just return constant and
+      # we can change it later if this fucks up something.
+      data = {"llvm":1, "clang":1, "clang_major":8, "clang_minor":1, 
+              "clang_patchlevel":0, "GNUC":4, "GNUC_MINOR":2, 
+              "GNUC_PATCHLEVEL":1, "clang_version": "8.1.0 (clang-802.0.42)", 
+              "VERSION": "4.2.1 Compatible Apple LLVM 8.1.0 (clang-802.0.42)"}
+      return (1, repr(data))
+
+    # Get the name of the calling function
+    caller = inspect.stack()[1][3]
+    # Yes, openMP works as far as libtbx configuration is concerned
+    if caller == "enable_openmp_if_possible":
+      return (1,"e=2.71828, pi=3.14159")
+    # This writes out a file with information on size type equivalence.
+    if caller == "write_type_id_eq_h":
+      # This is what the mac returns, but we handle this already anyway
+      return (1, "0010")
+    # Tests to see if we can include the openGL headers
+    if "gltbx/include_opengl.h" in code:
+      return (1, "6912")
+
+    assert False, "Unable to determine purpose of TryRun"
+
+  def TryCompile(self, code, **kwargs):
+    # This tests something to do with an old boost/clang bug apparently.
+    # Assume this is long past and we no longer need the workaround. (certainly
+    # anyone using clang is probably using something much more modern than our
+    # average supported GCC installation)
+    if code == """\
+      #include <boost/thread.hpp>
+
+      struct callable { void operator()(){} };
+      void whatever() {
+        callable f;
+        boost::thread t(f);
+      }
+      """:
+      return 1
+    # This appears.... to test that a compiler actually works.
+    elif code == "#include <iostream>":
+      return 1
+    # Is Python available?
+    elif code == "#include <Python.h>":
+      return 1
+    # A second check of openGL inclusion
+    elif code.strip() == "#include <gltbx/include_opengl.h>":
+      return 1
+    # Looks to see if the fftw3 library is importable
+    elif code == "#include <fftw3.h>":
+      return 1
+
+    assert False, "Not recognised TryCompile"
+
+  def Finish(self):
+    """Closes a configuration context. Nullop here."""
+    pass
+
+class SharedObject(object):
+  "Represents a shared object file that is compiled once and shared"
+  def __init__(self, path, environment):
+    self.path = path
+    self.environment = environment
+  def __repr__(self):
+    return "<SharedObject {}>".format(self.path)
+  def __iter__(self):
+    return iter([self.path])
+
+class SConsEnvironment(object):
+  """Represents an object created by the scons Environment() call.
+
+  Needs to be constructed separately so that it can be tracked by the
+  SCons-emulation environment.
+  """
+  _DEFAULT_KWARGS = {
+    "OBJSUFFIX": ".o",
+    "SHLINKFLAGS": [],
+    "BUILDERS": {},
+    "SHLINKCOM": ["SHLINKCOMDEFAULT"],
+    "LINKCOM": ["LINKCOMDEFAULT"],
+    "CCFLAGS": [],
+    "SHCCFLAGS": [],
+    "CXXFLAGS": [],
+    "SHCXXFLAGS": [],
+    "PROGPREFIX": "",
+    "PROGSUFFIX": "",
+    "LIBPREFIX": "lib",
+    "SHLIBPREFIX": "lib",
+    "LIBS": []
+  }
+
+  def __init__(self, emulator_environment, *args, **kwargs):
+    self.runner = emulator_environment
+    # self.parent = None
+    self.args = args
+    self.kwargs = copy.deepcopy(kwargs)
+    for key in self.kwargs:
+      self._update(key)
+
+  def _update(self, key):
+    pass
+
+  def Append(self, **kwargs):
+    for key, val in kwargs.items():
+      if isinstance(val, basestring):
+        val = [val]
+      if not key in self.kwargs:
+        self.kwargs[key] = []
+      self.kwargs[key].extend(val)
+      self._update(key)
+
+  def Prepend(self, **kwargs):
+    for key, val in kwargs.items():
+      if isinstance(val, basestring):
+        val = [val]
+      if not key in self.kwargs:
+        self.kwargs[key] = []
+      self.kwargs[key][:0] = val
+      self._update(key)
+
+  def Replace(self, **kwargs):
+    self.kwargs.update(kwargs)
+
+  def Configure(self):
+    return SConsConfigurationContext(self)
+
+  def Clone(self, **kwargs):
+    clone = type(self)(self.runner, **self.kwargs)
+    clone.kwargs.update(kwargs)
+    # clone.parent = self
+    return clone
+
+  # Some parts rely on old APIs and were never updated
+  Copy = Clone
+
+  def __setitem__(self, key, value):
+    self.kwargs[key] = value
+    self._update(key)
+
+  def __getitem__(self, key):
+    # Check the defaults first, so we only write to kwargs what isn't explicit
+    if not key in self.kwargs:
+      return self._DEFAULT_KWARGS[key]
+    return self.kwargs[key]
+
+  def Repository(self, path):
+    if path == "DISTPATH":
+      return
+    assert False, "Unknown Repository usage: {}".format(path)
+
+  def SConscript(self, name, exports=None):
+    """Sometimes, sub-SConscripts are called from an environment. Appears to behave the same."""
+    self.runner.sconscript_command(name, exports)
+
+  def _create_target(self, targettype, target, source, **kwargs):
+    """Gathers target information from the environment at the point of creation"""
+    if isinstance(source, basestring):
+      source = [source]
+    if target.startswith("#lib"):
+      target = "#/lib" + target[4:]
+    target = Target(targettype, output_name=target, sources=source)
+    target.origin_path = os.path.dirname(self.runner._current_sconscript)
+
+    # Massage lib list to flatten any odd sublists etc
+    libs = set()
+    for lib in self["LIBS"]:
+      if isinstance(lib, basestring):
+        libs.add(lib)
+      elif isinstance(lib, list):
+        libs |= set(lib)
+      else:
+        assert False
+
+    # Now let's filter/reduce the libs set. We know:
+    # - Everything gets boost_thread, boost_system if threading is available, so no special required.
+    # - Everything gets lm in SCons, unnecessary to track as universal (and automatic in clang?)
+    libs -= {"boost_thread", "boost_system", "m"}
+    target.boost_python = "boost_python" in libs
+    libs -= {"boost_python"}
+    target.extra_libs = libs
+
+    if targettype == Target.Type.SHARED:
+      target.prefix = self["SHLIBPREFIX"]
+    elif targettype == Target.Type.STATIC:
+      target.prefix = self["LIBPREFIX"]
+
+    target.module = self.runner._current_module
+    target.module.targets.append(target)
+    print(str(target))
+
+    self.runner.targets.append(target)
+    return target
+
+  def SharedLibrary(self, target, source, **kwargs):
+    self._create_target(Target.Type.SHARED, target, source, **kwargs)
+
+    # Target(Target.Type.SHARED, environment=self, output_name=target, sources=source, **kwargs)
+    # print("Shared lib: {} (relative to {})\n     sources: {}".format(target, self.runner._current_sconscript, source))
+
+  def StaticLibrary(self, target, source, **kwargs):
+    self._create_target(Target.Type.STATIC, target, source, **kwargs)
+
+    # print("Static lib: {} (relative to {})\n     sources: {}".format(target, self.runner._current_sconscript, source))
+
+  def Program(self, target, source):
+    self._create_target(Target.Type.PROGRAM, target, source)
+    # print("Program: {} (relative to {})\n     sources: {}".format(target, self.runner._current_sconscript, source))
+    # Used at least once
+    return [ProgramReturn(target)]
+
+  def cudaSharedLibrary(self, target, source):
+    target = self._create_target(Target.Type.CUDALIB, target, source)
+    # print("CUDA program: {}, {}".format(target, source))
+
+  def SharedObject(self,source):
+    print("Shared object: {}".format(source))
+    return SharedObject(source, self)
+
+
+
+
+
+
+class Target(object):
+  """Represents an output target, extracted information independent of SCons"""
+  class Type(Enum):
+    PROGRAM = "Program"
+    SHARED  = "Shared"
+    STATIC  = "Static"
+    MODULE  = "Module"
+    CUDALIB = "CUDALib"
+
+  def __init__(self, targettype, output_name, sources):
+    assert targettype in self.Type
+    self.type = targettype
+    
+    self.name = os.path.basename(output_name)
+    self.filename = self.name
+    self.output_path = os.path.dirname(output_name)
+
+    # self.output_name = output_name
+    self.sources = [x for x in sources if not isinstance(x, SharedObject)]
+    self.shared_sources = [x for x in sources if isinstance(x, SharedObject)]
+    self.boost_python = False
+    self.extra_libs = set()
+    self.prefix = ""
+    # The path the target was "created" from
+    self.origin_path = ""
+    self.module = None
+
+  @property
+  def output_filename(self):
+    return self.prefix + self.filename
+
+  def __str__(self):
+    out = ""
+    out += "{} Target {}:\n".format(self.type.value, self.name)
+    out += "   Output:  {}\n".format(os.path.join(self.output_path, self.output_filename))
+    out += "   Sources: {}\n".format(", ".join(self.sources))
+    if self.shared_sources:
+      out += "   SharedObjects: {}\n".format(self.shared_sources)
+    out += "   Boost-Python: {}\n".format(self.boost_python)
+    if self.extra_libs:
+      out += "   Libs: {}\n".format(", ".join(self.extra_libs))
+    out += "   Origin: {}\n".format(self.origin_path)
+    if self.module:
+      out += "   Module: {}\n".format(self.module)
+      
+    return out.strip()
+
+
+class _SConsBuilder(object):
+  def __init__(self, action, **kwargs):
+    self.action = action
+    self.kwargs = kwargs
+    self.builders = []
+  def add_src_builder(self, builder):
+    self.builders.append(builder)
+
+class _fakeFile(object):
+  """A fake file interface to return false data from an overridden open"""
+  def __init__(self, filename):
+    self.filename = filename
+    self.data = ""
+
+  def write(self, data):
+    self.data += data
+
+  def read(self):
+    caller = inspect.stack()[1][3]
+    if "csymlib.c" in self.filename or caller == "replace_printf":
+      return ""
+
+def _wrappedOpen(file, mode=None):
+  """A Fake open command to trap reading files in SConscripts"""
+  return _fakeFile(file)
+
+class SconsEmulator(object):
+  def __init__(self, dist):#, modules):
+    self._exports = {}
+    self._current_sconscript = None
+    self._current_module = None
+
+    self.dist_path = dist
+    # self.module_map = modules
+
+    self.targets = []
+
+    do_import_patching()
+
+
+  def parse_module(self, module):
+
+    self._current_module = module
+    scons = os.path.join(self.dist_path, module.path, "SConscript")
+    if not os.path.isfile(scons):
+      print("No Sconscript for module {}".format(module.name))
+      return
+    print "Parsing {}".format(module.name)  
+    self.parse_sconscript(scons)
+
+  def sconscript_command(self, name, exports=None):
+    newpath = os.path.join(os.path.dirname(self._current_sconscript), name)
+    print("Loading sub-sconscript {}".format(newpath))
+    self.parse_sconscript(newpath, custom_exports=exports)
+    print("Returning to sconscript {}".format(self._current_sconscript))
+
+  def parse_sconscript(self, filename, custom_exports=None):
+    # Build the object used to run the script
+    module = InjectableModule(filename)
+
+    # Build the Scons injection environment
+    def _env_export(*args):
+      print "Exporting", args
+      for name in args:
+        self._exports[name] = module.getvar(name)
+    def _env_import(*args):
+      print "Importing", args
+      inj = {}
+      for imp in args:
+        if custom_exports and imp in custom_exports:
+          inj[imp] = custom_exports[imp]
+        else:
+          inj[imp] = self._exports[imp]
+      module.inject(inj)
+
+    def _env_glob(path):
+      globpath = os.path.join(os.path.dirname(filename), path)
+      results = glob.glob(globpath)
+      ldir = len(os.path.dirname(filename))
+      return [x[ldir+1:] for x in results]
+
+    def _new_env(*args, **kwargs):
+      return SConsEnvironment(self, *args, **kwargs)
+
+    inj = {
+      "Environment": _new_env,
+      "open": _wrappedOpen,
+      "ARGUMENTS": {},
+      "Builder": _SConsBuilder,
+      "Export": _env_export,
+      "Import": _env_import,
+      "SConscript": self.sconscript_command,
+      "Glob": _env_glob,
+    }
+    # Inject this
+    module.inject(inj)
+    # Handle the stack of Sconscript processing
+    prev_scons = self._current_sconscript
+    self._current_sconscript = filename
+    # Now execute the script
+    module.execute()
+    self._current_sconscript = prev_scons
