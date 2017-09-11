@@ -48,6 +48,9 @@ class LibTBXModule(object):
   @property
   def has_config(self):
     return os.path.isfile(os.path.join(self.module_root, self.path, "libtbx_config"))
+  @property
+  def has_refresh(self):
+    return os.path.isfile(os.path.join(self.module_root, self.path, "libtbx_refresh.py"))
 
 @return_as_list
 def find_libtbx_modules(modulepath, repositories={"cctbx_project"}):
