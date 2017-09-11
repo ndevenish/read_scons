@@ -224,6 +224,10 @@ def read_distribution(module_path):
       logger.info("Removing module {} ({} targets)".format(module, len(tbx.modules[module].targets)))
       del tbx.modules[module]
 
+  # Remove any modules without targets (these might not even be real modules)
+  for module in [x.name for x in tbx.modules.values() if not x.targets]:
+    del tbx.modules[module]
+
   # Fix any duplicated target names
   _deduplicate_target_names(tbx.targets)
 
