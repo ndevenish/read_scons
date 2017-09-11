@@ -11,7 +11,7 @@ import collections
 import itertools
 
 from .utils import return_as_list
-from .sconsemu import SconsEmulator
+from .sconsemu import SconsEmulator, Target
 
 import logging
 logger = logging.getLogger(__name__)
@@ -155,14 +155,16 @@ def _build_dependency_graph(modules):
 
 def _deduplicate_target_names(targets):
   "Takes a list of targets and fixes names to avoid duplicates"
-  namecount = Counter([x.name for x in targets])
+  namecount = collections.Counter([x.name for x in targets])
   for duplicate in [x for x in namecount.keys() if namecount[x] > 1]:
     duped = [x for x in targets if x.name == duplicate]
-    modules = set(x.tbxmodule for x in duped)
+    modules = set(x.module for x in duped)
     assert len(modules) == len(duped), "Module name not enough to disambiguate duplicate targets named {} (in {})".format(duplicate, modules)
     for target in duped:
-      target.name = "{}_{}".format(target.name, target.tbxmodule)
-  assert all([x == 1 for _, x in Counter([x.name for x in targets]).items()]), "Deduplication failed"
+      oldname = target.name
+      target.name = "{}_{}".format(target.name, target.module.name)
+      logger.info("Renaming target {} to {}".format(oldname, target.name))
+  assert all([x == 1 for _, x in collections.Counter([x.name for x in targets]).items()]), "Deduplication failed"
 
 def read_module_path_sconscripts(module_path):
   """Parse all modules/SConscripts in a tbx module root.
@@ -204,54 +206,9 @@ def read_module_path_sconscripts(module_path):
 
   return tbx
 
-def _filter_targets(targets):
-  """Apply filters to targets in a list of modules."""
+def read_distribution(module_path):
+  "Reads a TBX distribution, filter and prepare for output conversion"
 
-  # Extract the target information from this
-  # targets = itertools.chain(*[x.targets for x in modules])
-  
-  # Remove any boost libraries that might be explicitly compiled
-  remove_boost = {"boost_thread", "boost_system", "boost_python", "boost_chrono"}
-  for boost in remove_boost:
-    tgt = [x for x in targets if x.name == boost]
-    for t in tgt:
-      yield t
-      # logger.info("Removing target {}".format(t.name))
-      # targets.remove(t)
-      # # Remove this target from the module that points to it
-      # t.module.targets.remove(t)
-
-  # Remove clipper and clipper_adaptbx because not sure how SCons resolves paths
-  # e.g. clipper adaptbx says "../clipper/<x>" but that's in cctbx_project and so
-  # an invalid path reference, but SCons finds it.
-  remove_mods = {"clipper", "clipper_adaptbx"}
-  for mod in remove_mods:
-    tgts = [x for x in targets if x.tbxmodule.name == mod]
-    for t in tgts:
-      logger.info("Removing target {} (removing {})".format(t.name, mod))
-      targets.remove(t)
-      t.module.targets.remove(t)
-
-# def read_tbx_distribution(module_path):
-#   tbx = TBXDistribution.from_module_path(module_path)
-
-
-
-
-def main(args=None):
-  logging.basicConfig(level=logging.INFO)
-
-  if args is None:
-    args = sys.argv[1:]
-  if "-h" in args or "--help" in args or len(args) != 1 or not os.path.isdir(args[0]):
-    print("Usage: read_scons.py <module_path>")
-    return 0
-
-  module_path = args[0]
-
-  # tbx = build_distribution_from_module_path(module_path)
-  # import pdb
-  # pdb.set_trace()
   tbx = read_module_path_sconscripts(module_path)
 
   # Remove the boost targets
@@ -267,6 +224,53 @@ def main(args=None):
       logger.info("Removing module {} ({} targets)".format(module, len(tbx.modules[module].targets)))
       del tbx.modules[module]
 
+  # Fix any duplicated target names
+  _deduplicate_target_names(tbx.targets)
+
+  # Classify any python-module-type targets as modules
+  for target in tbx.targets:
+    if target.boost_python and not target.prefix:
+      target.type = Target.Type.MODULE
+
+  # Make sure that all instances of shared source objects are known about
+  # and collapse them down to unshared sources.
+  KNOWN_IGNORABLE_SHARED = [
+    ['numpy_bridge.cpp'],
+    ['lbfgs_fem.cpp'],
+    ['boost_python/outlier_helpers.cc'],
+    ['nanoBragg_ext.cpp', 'nanoBragg.cpp']
+  ]
+  for target in [x for x in tbx.targets if x.shared_sources]:
+    src = target.shared_sources[0].path
+    if isinstance(src, basestring):
+      src = [src]
+    if src in KNOWN_IGNORABLE_SHARED:
+      target.sources.extend(src)
+      target.shared_sources = []
+
+  # Check assumptions about all the targets
+  assert all(x.module for x in tbx.targets), "Not all targets belong to a module"
+  assert all(x.prefix == "lib" for x in tbx.targets if x.type == Target.Type.SHARED)
+  assert all(x.prefix == "lib" for x in tbx.targets if x.type == Target.Type.STATIC)
+  assert all(x.prefix == "" for x in tbx.targets if x.type == Target.Type.MODULE)
+  assert all(not x.shared_sources for x in tbx.targets), "Shared sources exists - all should be filtered"
+
+  return tbx
+
+
+def main(args=None):
+  logging.basicConfig(level=logging.INFO)
+
+  if args is None:
+    args = sys.argv[1:]
+  if "-h" in args or "--help" in args or len(args) != 1 or not os.path.isdir(args[0]):
+    print("Usage: read_scons.py <module_path>")
+    return 0
+
+  module_path = args[0]
+  tbx = read_distribution(module_path)
+
+  # Print some information out
   all_libs = set(itertools.chain(*[x.extra_libs for x in tbx.targets]))
   logger.info("All linked libraries: {}".format(", ".join(all_libs)))
   logger.info("All external (w/o known like boost): {}".format(", ".join(all_libs - {x.name for x in tbx.targets})))
@@ -275,36 +279,6 @@ def main(args=None):
   import pdb
   pdb.set_trace()
 
-
-  # Fix any duplicated target names
-  _deduplicate_target_names(targets)
-
-  # Find the python-module targets and change their target type
-  for target in targets:
-    if target.boost_python and not target.prefix:
-      target.type = Target.Type.MODULE
-
-  # Validate known cases of shared sources
-  KNOWN_IGNORABLE_SHARED = [
-    ['numpy_bridge.cpp'],
-    ['lbfgs_fem.cpp'],
-    ['boost_python/outlier_helpers.cc'],
-    ['nanoBragg_ext.cpp', 'nanoBragg.cpp']
-  ]
-  for target in [x for x in targets if x.shared_sources]:
-    src = target.shared_sources[0].path
-    if isinstance(src, basestring):
-      src = [src]
-    if src in KNOWN_IGNORABLE_SHARED:
-      target.sources.extend(src)
-      target.shared_sources = []
-
-  # Check assumptions about libraries
-  assert all(x.tbxmodule for x in targets)
-  assert all(x.prefix == "lib" for x in targets if x.type == Target.Type.SHARED)
-  assert all(x.prefix == "lib" for x in targets if x.type == Target.Type.STATIC)
-  assert all(x.prefix == "" for x in targets if x.type == Target.Type.MODULE)
-  assert all(not x.shared_sources for x in targets), "Shared sources exists - all should be filtered"
 
   # Can't: Not all python libraries end up in lib
   # assert all(x.output_path == "#/lib" for x in targets if x.type == Target.Type.MODULE)
