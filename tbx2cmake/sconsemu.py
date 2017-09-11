@@ -216,8 +216,6 @@ class SConsEnvironment(object):
     # - Everything gets boost_thread, boost_system if threading is available, so no special required.
     # - Everything gets lm in SCons, unnecessary to track as universal (and automatic in clang?)
     libs -= {"boost_thread", "boost_system", "m"}
-    target.boost_python = "boost_python" in libs
-    libs -= {"boost_python"}
     target.extra_libs = libs
 
     if targettype == Target.Type.SHARED:
@@ -282,7 +280,6 @@ class Target(object):
     # self.output_name = output_name
     self.sources = [x for x in sources if not isinstance(x, SharedObject)]
     self.shared_sources = [x for x in sources if isinstance(x, SharedObject)]
-    self.boost_python = False
     self.extra_libs = set()
     self.prefix = ""
     # The path the target was "created" from
@@ -300,7 +297,6 @@ class Target(object):
     out += "   Sources: {}\n".format(", ".join(self.sources))
     if self.shared_sources:
       out += "   SharedObjects: {}\n".format(self.shared_sources)
-    out += "   Boost-Python: {}\n".format(self.boost_python)
     if self.extra_libs:
       out += "   Libs: {}\n".format(", ".join(self.extra_libs))
     out += "   Origin: {}\n".format(self.origin_path)

@@ -229,7 +229,7 @@ def read_distribution(module_path):
 
   # Classify any python-module-type targets as modules
   for target in tbx.targets:
-    if target.boost_python and not target.prefix:
+    if "boost_python" in target.extra_libs and not target.prefix:
       target.type = Target.Type.MODULE
 
   # Make sure that all instances of shared source objects are known about
@@ -272,8 +272,9 @@ def main(args=None):
 
   # Print some information out
   all_libs = set(itertools.chain(*[x.extra_libs for x in tbx.targets]))
+  
   logger.info("All linked libraries: {}".format(", ".join(all_libs)))
-  logger.info("All external (w/o known like boost): {}".format(", ".join(all_libs - {x.name for x in tbx.targets})))
+  logger.info("All external (w/o universal): {}".format(", ".join(all_libs - {x.name for x in tbx.targets})))
   logger.info("{} Targets remaining".format(len(tbx.targets)))
 
   import pdb
