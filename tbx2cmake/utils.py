@@ -16,6 +16,18 @@ def return_as_list(f):
     return list(f(*args, **kwargs))
   return _wrap
 
+def fully_split_path(path):
+  "Splits a path until there is nothing left to split"
+  parts = []
+  head = path
+  tail = path
+  while head and tail:
+    head, tail = os.path.split(head)
+    parts.insert(0, tail)
+  if head:
+    parts.insert(0, head)
+  return parts
+
 class InjectableModule(object):
   """Load and run a python script with an injected globals dictionary.
   This is to emulate what it appears libtbx/scons does to run refresh scripts.
