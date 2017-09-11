@@ -200,7 +200,7 @@ class SConsEnvironment(object):
     if target.startswith("#lib"):
       target = "#/lib" + target[4:]
     target = Target(targettype, output_name=target, sources=source)
-    target.origin_path = os.path.dirname(self.runner._current_sconscript)
+    target.origin_path = os.path.dirname(os.path.relpath(self.runner._current_sconscript, self.runner.dist_path))
 
     # Massage lib list to flatten any odd sublists etc
     libs = set()
