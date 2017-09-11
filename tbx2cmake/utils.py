@@ -2,6 +2,7 @@
 
 import os
 import imp
+import contextlib
 
 class AttrDict(dict):
   """Object that can access dictionary elements as keys or attributes"""
@@ -38,3 +39,11 @@ class InjectableModule(object):
   def getvar(self, name):
     """Return a variable from inside the module's globals"""
     return getattr(self.module, name)
+
+@contextlib.contextmanager
+def monkeypatched(object, name, patch):
+  """ Temporarily monkeypatches an object. """
+  pre_patched_value = getattr(object, name)
+  setattr(object, name, patch)
+  yield object
+  setattr(object, name, pre_patched_value)

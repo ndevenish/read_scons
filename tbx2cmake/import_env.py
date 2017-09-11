@@ -9,9 +9,11 @@ import sys
 import re
 from types import ModuleType
 from mock import Mock
+import contextlib
 
 from .utils import AttrDict
 from .tbxemu import *
+from .utils import monkeypatched
 
 def new_module(name, doc=None):
   """Create a new module and inject it into sys.modules.
@@ -48,6 +50,8 @@ def _tbx_darwin_shlinkcom(env_etc, env, lo, dylib):
   if "libboost_thread.lo" in lo:
     return
   if "libboost_python.lo" in lo:
+    return
+  if "libboost_system.lo" in lo:
     return
   _wtf(env_etc, env, lo, dylib)
 
@@ -118,3 +122,10 @@ def do_import_patching():
 
   SCons.Action.FunctionAction = Mock()
   SCons.Scanner.C.CScanner = Mock()
+
+# def monkeypatched(object, name, patch):
+#   """ Temporarily monkeypatches an object. """
+#   pre_patched_value = getattr(object, name)
+#   setattr(object, name, patch)
+#   yield object
+#   setattr(object, name, pre_patched_value)

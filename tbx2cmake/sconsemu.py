@@ -4,10 +4,13 @@ import os
 import inspect
 import copy
 import glob
+import contextlib
+import fnmatch
+import traceback
 
 from enum import Enum
 
-from .utils import InjectableModule
+from .utils import InjectableModule, monkeypatched
 from .import_env import do_import_patching
 
 class ProgramReturn(object):
@@ -44,7 +47,9 @@ class SConsConfigurationContext(object):
       return (1, repr(data))
 
     # Get the name of the calling function
-    caller = inspect.stack()[1][3]
+    with no_intercept_os():
+      caller = inspect.stack()[1][3]
+    
     # Yes, openMP works as far as libtbx configuration is concerned
     if caller == "enable_openmp_if_possible":
       return (1,"e=2.71828, pi=3.14159")
@@ -323,13 +328,80 @@ class _fakeFile(object):
     self.data += data
 
   def read(self):
-    caller = inspect.stack()[1][3]
+    with no_intercept_os():
+      caller = inspect.stack()[1][3]
     if "csymlib.c" in self.filename or caller == "replace_printf":
       return ""
 
 def _wrappedOpen(file, mode=None):
   """A Fake open command to trap reading files in SConscripts"""
   return _fakeFile(file)
+
+
+@contextlib.contextmanager
+def no_intercept_os():
+  "Contextmanager to temporarily suspend the OS interception checks"
+  _orig = _fake_os_env.passthrough 
+  _fake_os_env.passthrough = True
+  yield
+  _fake_os_env.passthrough = _orig
+
+
+class _fake_os_env(object):
+  passthrough = False
+  def __init__(self):
+    self._os = {}
+    self._ospath = {}
+
+  def __enter__(self):
+    for name in {"mkdir"}:
+      self._os[name] = getattr(os, name)
+      setattr(os, name, getattr(self, "_fake_{}".format(name)))
+    
+    for name in {"isdir", "isfile", "exists"}:
+      self._ospath[name] = getattr(os.path, name)
+      setattr(os.path, name, getattr(self, "_fake_{}".format(name)))
+
+  def __exit__ (self, type, value, tb):
+    for name, value in self._os.items():
+      setattr(os, name, value)
+    for name, value in self._ospath.items():
+      setattr(os.path, name, value)
+
+  def _fake_mkdir(self, path, mode):
+    assert path.startswith("UNDERBUILD")
+
+  def _fake_isdir(self, path):
+    if path.startswith("UNDERBUILD"):
+      return True
+    if path.endswith("eigen"):
+      return True
+    if path == "DISTPATH/boost/boost/system":
+      return True
+
+    print("IS DIR: {}".format(path))
+    # Everything exists for sconsscripts!
+    # allowed_exists = {,}
+    return True
+
+  def _fake_isfile(self, file):
+    if not _fake_os_env.passthrough:
+      print("IS FILE: {}".format(file))
+      traceback.print_stack()
+      return self._ospath["isfile"](file)
+
+
+  def _fake_exists(self, path):
+    if not _fake_os_env.passthrough:  
+      print("EXISTS: {}".format(path))
+      traceback.print_stack()
+    return self._ospath["exists"](path)  
+
+
+# @contextlib.contextmanager
+# def do_os_patching():
+#   with monkeypatched(os, "mkdir", _fake_mkdir):
+#     yield
 
 class SconsEmulator(object):
   def __init__(self, dist):#, modules):
@@ -405,5 +477,6 @@ class SconsEmulator(object):
     prev_scons = self._current_sconscript
     self._current_sconscript = filename
     # Now execute the script
-    module.execute()
+    with _fake_os_env():
+      module.execute()
     self._current_sconscript = prev_scons
