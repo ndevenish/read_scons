@@ -185,7 +185,7 @@ class CMLLibraryOutput(CMakeListBlock):
     elif self.target.type == self.target.Type.SHARED:
       return "SHARED"
     elif self.target.type == self.target.Type.STATIC:
-      return "SHARED"
+      return "STATIC"
 
   @property
   def is_python_module(self):
@@ -221,7 +221,7 @@ class CMLLibraryOutput(CMakeListBlock):
     # Add generated sources
     if self.target.generated_sources:
       addgen = "add_generated_sources( {} ".format(self.target.name)
-      lines.append(_append_list_to(addgen, self.target.generated_sources, append=(" )", "\n)")))
+      lines.append(_append_list_to(addgen, self.target.generated_sources, append=(" )", " )")))
     extra_libs = self.target.extra_libs
     if self.is_python_module:
       extra_libs = extra_libs - {"boost_python"}
@@ -261,6 +261,7 @@ def read_autogen_information(filename, tbx):
             # Change the sources list to use a relative reference to the target path
             target.sources.remove(source)
             relpath = os.path.relpath(os.path.join(repo, source[1:]), target.origin_path)
+            target.sources.append(relpath)
             # print("  rewriting to {}".format(relpath))
             break
         # Did we find?
@@ -270,15 +271,34 @@ def read_autogen_information(filename, tbx):
     if unknown:
       print("Unknown {} from {}: {}".format(target.name, target.origin_path, unknown))
 
+  # Now, some of the sources are relative to "source or build" and so we need to
+  # mark them as explicitly generated.
+  for target in tbx.targets:
+    for source in list(target.sources):
+      if not os.path.isfile(os.path.join(tbx.module_path, target.origin_path, source)):
+        # print("Could not find {}:{}".format(target.name, source))
+        # Look in the generated sources list
+        relpath = os.path.relpath(target.origin_path, target.module.path)
+        genpath = os.path.normpath(os.path.join(target.module.name, relpath, source))
+        assert genpath in tbx.all_generated, "Could not find missing source {}:{}".format(target.name, source)
+          # print("   Found generated at {}".format(genpath))
+        target.sources.remove(source)
+        target.generated_sources.add(genpath)
+
   # Double-check that we have no unknown lookup sources
   assert not unknown, "Unknown scons-repository sources: {}".format(unknown)
+
+  for target in tbx.targets:
+    if not target.sources:
+      logger.warning("Target {}:{} has no non-generated sources".format(target.origin_path, target.name))
 
 def _target_rename(name):
   "Renames a target to the CMake target name, if required"
   dependency_renames = {
     "boost_python": "Boost::python",
     "tiff": "TIFF::TIFF",
-
+    "GL": "OpenGL::GL",
+    "GLU": "OpenGL::GLU"
   }
   return dependency_renames.get(name, name)
 
