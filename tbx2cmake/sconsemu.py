@@ -469,10 +469,6 @@ class _fake_system_env(object):
     print("IS FILE: {}".format(file))
     traceback.print_stack()
 
-    if "cbf_ws.c" in file:
-      import pdb
-      pdb.set_trace()
-
     with self.suspend():
       # If given a special location, try to find it
       if file.startswith("DISTPATH["):
