@@ -146,6 +146,20 @@ class CMLModuleRootBlock(CMakeListBlock):
 
     return "\n".join(lines)
 
+def _append_list_to(line, list, join=" ", indent=4, append=("","")):
+  """
+  Appends a list to a line, either inline or as separate lines depending on length.
+
+  :param join:   The string to join between or at the end of entries
+  :param indent: How far to indent if using separate lines
+  :param append: What to append. A tuple of (inline, split) postfixes
+  """
+  if len(line + join.join(list)) + 2 <= 78:
+    return line + join.join(list) + append[0]
+  else:
+    joiner = join.strip() + "\n" + " "*indent
+    return line + "\n" + " "*indent + joiner.join(list) + append[1]
+
 class CMLLibraryOutput(CMakeListBlock):
   def __init__(self, target):
     self.target = target
@@ -175,20 +189,26 @@ class CMLLibraryOutput(CMakeListBlock):
 
     add_lib = add_command.format(self.target.name, self.typename)
 
-    # Split sources into fixed and generated
-    fixed_sources = self.target.sources
-    gen_sources = []
-
+    # Work out if we can put all the sources on one line
     lines = []
-    if len(add_lib + " ".join(fixed_sources)) + 2 <= 78:
-      lines.append(add_lib + " ".join(fixed_sources) + " )")
-    else:
-      lines.append(add_lib)
-      lines.extend(["    " + x for x in fixed_sources])
-      lines.append(")")
+
+    lines.append(_append_list_to(add_lib, self.target.sources, append=(" )", "\n)")))
+
+    # lines.extend()
+    # if len(add_lib + " ".join(self.target.sources)) + 2 <= 78:
+    #   lines.append(add_lib + " ".join(self.target.sources) + " )")
+    # else:
+    #   lines.append(add_lib)
+    #   lines.extend(["    " + x for x in self.target.sources])
+    #   lines.append(")")
 
     assert self.target.name == self.target.filename
 
+    # Add generated sources
+    if self.target.generated_sources:
+      addgen = "add_generated_sources( {} ".format(self.target.name)
+      lines.append(_append_list_to(addgen, self.target.generated_sources, append=(" )", "\n)")))
+      print("Generated for ", self.target.origin_path)
     extra_libs = self.target.extra_libs
     if self.is_python_module:
       extra_libs = extra_libs - {"boost_python"}
@@ -240,6 +260,15 @@ def read_autogen_information(filename, tbx):
   # Double-check that we have no unknown lookup sources
   assert not unknown, "Unknown scons-repository sources: {}".format(unknown)
 
+def _target_rename(name):
+  "Renames a target to the CMake target name, if required"
+  dependency_renames = {
+    "boost_python": "Boost::python",
+    "tiff": "TIFF::TIFF",
+
+  }
+  return dependency_renames.get(name, name)
+
 def main():
   logging.basicConfig(level=logging.INFO)
 
@@ -274,7 +303,7 @@ def main():
     cmakelist = root.get_path(target.origin_path)
     cmakelist.targets.append(target)
 
-  root.draw_tree()
+  # root.draw_tree()
 
   # Make sure the output path exists
   if not os.path.isdir(output_dir):

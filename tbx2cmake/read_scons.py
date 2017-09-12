@@ -219,6 +219,13 @@ def read_module_path_sconscripts(module_path):
 
   return tbx
 
+def _is_cuda_target(target):
+  if target.type == Target.Type.CUDALIB:
+    return True
+  if "cufft" in target.extra_libs:
+    return True
+  return False
+
 def read_distribution(module_path):
   "Reads a TBX distribution, filter and prepare for output conversion"
 
@@ -232,10 +239,19 @@ def read_distribution(module_path):
     tbx.targets.remove(target)
 
   # Remove any modules we don't want
-  for module in {"clipper", "clipper_adaptbx"}:
+  # - Clipper has some script referencing we don't understand completely
+  # - fftw3tbx uses an external library and we don't use this in dials, so skip for now
+  for module in {"clipper", "clipper_adaptbx", "fftw3tbx"}:
     if module in tbx.modules:
       logger.info("Removing module {} ({} targets)".format(module, len(tbx.modules[module].targets)))
       del tbx.modules[module]
+
+  # Remove CUDA projects, for now
+  for target in [x for x in tbx.targets if _is_cuda_target(x)]:
+    logger.info("Removing CUDA target {}".format(target.name))
+    tbx.targets.remove(target)
+  # for target in [x for x in tbx.targets:
+
 
   # Remove any modules without targets (these might not even be real modules)
   for module in [x.name for x in tbx.modules.values() if not x.targets]:
@@ -275,6 +291,16 @@ def read_distribution(module_path):
   # For all targets named directly after a module, ensure it's in the module root
   assert all([x.origin_path == tbx.modules[x.name].path for x in tbx.targets if x.name in tbx.modules])
 
+  # Print some information out
+  all_libs = set(itertools.chain(*[x.extra_libs for x in tbx.targets]))
+  external_libs = all_libs - {x.name for x in tbx.targets}
+  logger.info("All linked libraries: {}".format(", ".join(all_libs)))
+  logger.info("All external (w/o universal): {}".format(", ".join(external_libs)))
+  logger.info("{} Targets remaining".format(len(tbx.targets)))
+
+  # Check that we know and expect all the external libraries
+  assert external_libs == {"tiff", "boost_python"}, "Unexpected extra external libs in: {}".format(external_libs)
+  
   return tbx
 
 
@@ -290,12 +316,6 @@ def main(args=None):
   module_path = args[0]
   tbx = read_distribution(module_path)
 
-  # Print some information out
-  all_libs = set(itertools.chain(*[x.extra_libs for x in tbx.targets]))
-  
-  logger.info("All linked libraries: {}".format(", ".join(all_libs)))
-  logger.info("All external (w/o universal): {}".format(", ".join(all_libs - {x.name for x in tbx.targets})))
-  logger.info("{} Targets remaining".format(len(tbx.targets)))
 
   import pdb
   pdb.set_trace()
