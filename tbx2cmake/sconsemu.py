@@ -476,7 +476,7 @@ class SconsEmulator(object):
 
     self.targets = []
 
-    do_import_patching()
+    do_import_patching(dist)
 
 
   def parse_module(self, module):

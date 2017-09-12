@@ -61,9 +61,9 @@ class libtbxBuildOptions(object):
 class libtbxEnv(object):
   boost_version = 106500
 
-  def __init__(self):
+  def __init__(self, dist_path):
     self.build_options = libtbxBuildOptions()
-
+    self._dist_path = dist_path
 
   def under_build(self, path):
     return os.path.join("UNDERBUILD", path)#UnderBuild(path)
@@ -71,11 +71,22 @@ class libtbxEnv(object):
   def under_base(self, path):
     return os.path.join("BASEDIR", path)#UnderBase(path)
 
-  def dist_path(self, path):
-    return os.path.join("DISTPATH", path)
+  def dist_path(self, module):
+    print("Asked for dist path {}".format(module))
+
+    for repo in [".", "cctbx_project"]:
+      path = os.path.normpath(os.path.join(self._dist_path, repo, module))
+      if os.path.isdir(path):
+        print("  found exact {}".format(path))
+        return path
+    assert False
+    ret = "DISTPATH[{}]/".format(module)
+    print("   returning {} ".format(ret))
+    return ret
 
   def under_dist(self, module_name, path):
     return os.path.join("DISTPATH[{}]".format(module_name), path)
+
   @property
   def build_path(self):
     return "UNDERBUILD"
@@ -182,7 +193,7 @@ def _getenv_bool(variable_name, default=False):
   assert variable_name in results, "Unknown getenv_bool {}".format(variable_name)
   return results[variable_name]
 
-def do_import_patching():
+def do_import_patching(dist_path):
   # Only do this once
   global _patching_done
   if _patching_done:
@@ -215,7 +226,7 @@ def do_import_patching():
   libtbx.utils.warn_if_unexpected_md5_hexdigest = Mock()
   libtbx.utils.write_this_is_auto_generated =  Mock()
 
-  libtbx.env = libtbxEnv()
+  libtbx.env = libtbxEnv(dist_path)
   libtbx.easy_run = new_module("libtbx.easy_run")
   libtbx.easy_run.fully_buffered = _tbx_easyrun_fully_buffered
 
