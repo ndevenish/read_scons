@@ -372,6 +372,7 @@ def _target_rename(name):
     "GLU": "OpenGL::GLU",
     "boost_thread": "Boost::thread",
     "hdf5_c": "HDF5::C",
+    "boost": "Boost::boost",
   }
   return dependency_renames.get(name, name)
 
