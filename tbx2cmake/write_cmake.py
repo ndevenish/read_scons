@@ -144,6 +144,20 @@ class CMLModuleRootBlock(CMakeListBlock):
       # We're just an interface library
       lines.append("add_library( {} INTERFACE )".format(self.cml.module.name))
 
+    # Write out the libtbx refresh generator, along with the sources it creates
+    if self.cml.module.generated_sources:
+      lines.append("")
+      lines.append("add_libtbx_refresh_command( ${CMAKE_CURRENT_SOURCE_DIR}/libtbx_refresh.py")
+
+      slines = []
+      for source in sorted(self.cml.module.generated_sources):
+        indent = "            "
+        if not slines:
+          indent = "     OUTPUT "
+        slines.append(indent + "${CMAKE_BINARY_DIR}/" + source)
+      slines.append(")")
+      lines.extend(slines)
+
     return "\n".join(lines)
 
 def _append_list_to(line, list, join=" ", indent=4, append=("","")):
@@ -208,7 +222,6 @@ class CMLLibraryOutput(CMakeListBlock):
     if self.target.generated_sources:
       addgen = "add_generated_sources( {} ".format(self.target.name)
       lines.append(_append_list_to(addgen, self.target.generated_sources, append=(" )", "\n)")))
-      print("Generated for ", self.target.origin_path)
     extra_libs = self.target.extra_libs
     if self.is_python_module:
       extra_libs = extra_libs - {"boost_python"}
