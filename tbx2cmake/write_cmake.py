@@ -373,6 +373,7 @@ def _target_rename(name):
     "boost_thread": "Boost::thread",
     "hdf5_c": "HDF5::C",
     "boost": "Boost::boost",
+    "eigen": "Eigen::Eigen",
   }
   return dependency_renames.get(name, name)
 
