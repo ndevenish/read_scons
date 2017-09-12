@@ -132,7 +132,8 @@ class SConsEnvironment(object):
     "PROGSUFFIX": "",
     "LIBPREFIX": "lib",
     "SHLIBPREFIX": "lib",
-    "LIBS": []
+    "LIBS": [],
+    "CPPPATH": [],
   }
 
   def __init__(self, emulator_environment, *args, **kwargs):
@@ -226,7 +227,7 @@ class SConsEnvironment(object):
     libs -= {"boost_thread", "boost_system", "m"}
     target.extra_libs = libs
 
-    # Handle frameworks from this
+    # Handle link flags
     linkflags = list(self["SHLINKFLAGS"])
     known_ignore_flags = {"-fopenmp", "-shared", "-rdynamic"}
     for flag in known_ignore_flags:
@@ -235,6 +236,24 @@ class SConsEnvironment(object):
     assert not linkflags, "Unknown link flag: {}".format(linkflags)
     if linkflags:
       print("Unhandled link flags: ", linkflags)
+
+    # Handle include directories.
+    # import pdb
+    # pdb.set_trace()
+    if "CPPPATH" in self.kwargs:
+      # Remove things we expect
+      COMMON_INCLUDES = {
+        ".", 
+        "DISTPATH", 
+        "PYTHON/INCLUDE/PATH",
+        "UNDERBUILD/include",
+        "DISTPATH/boost",
+        "REPOSITORIES",
+        "BASEDIR/include"
+        }
+      extra_paths = set(self["CPPPATH"]) - COMMON_INCLUDES
+      if extra_paths:
+        print ("Path: {}".format(sorted(extra_paths)))
 
     if targettype == Target.Type.SHARED:
       target.prefix = self["SHLIBPREFIX"]
@@ -305,10 +324,14 @@ class Target(object):
     # The path the target was "created" from
     self.origin_path = ""
     self.module = None
+    self.include_paths = set()
 
   @property
   def output_filename(self):
     return self.prefix + self.filename
+
+  def __repr__(self):
+    return "<Target {}:{}>".format(self.origin_path, self.name)
 
   def __str__(self):
     out = ""

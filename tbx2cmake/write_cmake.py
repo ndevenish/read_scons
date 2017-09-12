@@ -130,6 +130,7 @@ class CMLSubDirBlock(CMakeListBlock):
 
 class CMLModuleRootBlock(CMakeListBlock):
   def __str__(self):
+    module = self.cml.module
     lines = []
     lines.append("project({})".format(self.cml.module.name))
     lines.append("")
@@ -142,7 +143,21 @@ class CMLModuleRootBlock(CMakeListBlock):
       lines.append(str(CMLLibraryOutput(module_target[0])))
     else:
       # We're just an interface library
-      lines.append("add_library( {} INTERFACE )".format(self.cml.module.name))
+      lines.append("add_library( {} INTERFACE )".format(module.name))
+      include_paths = {"${CMAKE_CURRENT_SOURCE_DIR}/.."}
+      # Handle any replacements in this path
+      for path in module.include_paths:
+        assert not path.startswith("!"), "No private includes for interface libraries"
+        if path.startswith("#base"):
+          path = path.replace("#base", "${CMAKE_SOURCE_DIR}")
+        elif path.startswith("#build"):
+          path = path.replace("#build", "${CMAKE_BINARY_DIR}")
+        else:
+          path = "${CMAKE_CURRENT_SOURCE_DIR}/" + path
+        include_paths.add(path)
+      linepre = "target_include_directories( {} INTERFACE ".format(module.name)
+
+      lines.append(_append_list_to(linepre, include_paths, append=(" )", "\n)")))
 
     # Write out the libtbx refresh generator, along with the sources it creates
     if self.cml.module.generated_sources:
@@ -206,7 +221,7 @@ class CMLLibraryOutput(CMakeListBlock):
     # Work out if we can put all the sources on one line
     lines = []
 
-    lines.append(_append_list_to(add_lib, self.target.sources, append=(" )", "\n)")))
+    lines.append(_append_list_to(add_lib, self.target.sources, append=(" )", " )")))
 
     # lines.extend()
     # if len(add_lib + " ".join(self.target.sources)) + 2 <= 78:
@@ -288,9 +303,34 @@ def read_autogen_information(filename, tbx):
   # Double-check that we have no unknown lookup sources
   assert not unknown, "Unknown scons-repository sources: {}".format(unknown)
 
+  # Warn about any targets with no normal sources
   for target in tbx.targets:
     if not target.sources:
       logger.warning("Target {}:{} has no non-generated sources".format(target.origin_path, target.name))
+
+  # Handle any forced dependencies (e.g. things we can't tell/can't tell easily from SCons)
+  for name, deps in data.get("dependencies", {}).items():
+    if isinstance(deps, basestring):
+      deps = [deps]
+    # find this target
+    target = tbx.targets[name]
+    print("Adding {} to {}".format(", ".join(deps), target.name))
+    target.extra_libs |= set(deps)
+  
+  # Handle adding of include paths to specific targets/modules
+  for name, incs in data.get("target_includes", {}).items():
+    if isinstance(incs, basestring):
+      incs = [incs]
+
+    inc_target = None
+    if name in tbx.targets:
+      inc_target = tbx.targets[name]
+    elif name in tbx.modules:
+      inc_target = tbx.modules[name]
+    else:
+      logger.warning("No target/module named {} found; ignoring extra include paths".format(name))
+    if inc_target:
+      inc_target.include_paths |= set(incs)
 
 def _target_rename(name):
   "Renames a target to the CMake target name, if required"
