@@ -1,12 +1,14 @@
 # coding: utf-8
 
 import os
+import sys
 import inspect
 import copy
 import glob
 import contextlib
 import fnmatch
 import traceback
+from collections import defaultdict
 
 from enum import Enum
 
@@ -218,6 +220,17 @@ class SConsEnvironment(object):
     libs -= {"boost_thread", "boost_system", "m"}
     target.extra_libs = libs
 
+    # Handle frameworks from this
+    linkflags = list(self["SHLINKFLAGS"])
+    while "-fopenmp" in linkflags:
+      linkflags.remove("-fopenmp")
+    while "-framework" in linkflags:
+      index = linkflags.index("-framework")
+      target.extra_libs += linkflags[index+1]
+      linkflags.pop(index+1)
+      linkflags.pop(index)
+    print("Unhandled link flags: ", linkflags)
+
     if targettype == Target.Type.SHARED:
       target.prefix = self["SHLIBPREFIX"]
     elif targettype == Target.Type.STATIC:
@@ -226,6 +239,7 @@ class SConsEnvironment(object):
     target.module = self.runner._current_module
     target.module.targets.append(target)
     print(str(target))
+
 
     self.runner.targets.append(target)
     return target
@@ -338,32 +352,54 @@ def _wrappedOpen(file, mode=None):
 @contextlib.contextmanager
 def no_intercept_os():
   "Contextmanager to temporarily suspend the OS interception checks"
-  _orig = _fake_os_env.passthrough 
-  _fake_os_env.passthrough = True
+  _orig = _fake_system_env.passthrough 
+  _fake_system_env.passthrough = True
   yield
-  _fake_os_env.passthrough = _orig
+  _fake_system_env.passthrough = _orig
 
 
-class _fake_os_env(object):
+class _fake_system_env(object):
   passthrough = False
   def __init__(self):
-    self._os = {}
-    self._ospath = {}
+    # self._os = {}
+    # self._ospath = {}
+    # self._sys = {}
+
+    self._orig = defaultdict(dict)
+
+  _to_rewrite = {
+    os: {"mkdir", "name"},
+    os.path: {"isdir", "isfile", "exists"},
+    sys: {"platform"}
+  }
 
   def __enter__(self):
-    for name in {"mkdir"}:
-      self._os[name] = getattr(os, name)
-      setattr(os, name, getattr(self, "_fake_{}".format(name)))
+    for module, names in self._to_rewrite.items():
+      for name in names:
+        self._orig[module][name] = getattr(module, name)
+        setattr(module, name, getattr(self, "_fake_{}".format(name)))
+
+    # for name in {"mkdir", "name"}:
+    #   self._os[name] = getattr(os, name)
+    #   setattr(os, name, getattr(self, "_fake_{}".format(name)))
     
-    for name in {"isdir", "isfile", "exists"}:
-      self._ospath[name] = getattr(os.path, name)
-      setattr(os.path, name, getattr(self, "_fake_{}".format(name)))
+    # for name in {"isdir", "isfile", "exists"}:
+    #   self._ospath[name] = getattr(os.path, name)
+    #   setattr(os.path, name, getattr(self, "_fake_{}".format(name)))
+
+    # for name in {"isdir", "isfile", "exists"}:
+    #   self._ospath[name] = getattr(os.path, name)
+    #   setattr(os.path, name, getattr(self, "_fake_{}".format(name)))
+
 
   def __exit__ (self, type, value, tb):
-    for name, value in self._os.items():
-      setattr(os, name, value)
-    for name, value in self._ospath.items():
-      setattr(os.path, name, value)
+    for module, entries in self._orig.items():
+      for name, value in entries.items():
+        setattr(module, name, value)
+
+  _fake_name = "posix"
+  _fake_platform = "linux2"
+  
 
   def _fake_mkdir(self, path, mode):
     assert path.startswith("UNDERBUILD")
@@ -382,14 +418,14 @@ class _fake_os_env(object):
     return True
 
   def _fake_isfile(self, file):
-    if not _fake_os_env.passthrough:
+    if not _fake_system_env.passthrough:
       print("IS FILE: {}".format(file))
       traceback.print_stack()
       return self._ospath["isfile"](file)
 
 
   def _fake_exists(self, path):
-    if not _fake_os_env.passthrough:  
+    if not _fake_system_env.passthrough:  
       print("EXISTS: {}".format(path))
       traceback.print_stack()
     return self._ospath["exists"](path)  
@@ -474,6 +510,6 @@ class SconsEmulator(object):
     prev_scons = self._current_sconscript
     self._current_sconscript = filename
     # Now execute the script
-    with _fake_os_env():
+    with _fake_system_env():
       module.execute()
     self._current_sconscript = prev_scons
