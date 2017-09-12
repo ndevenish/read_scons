@@ -378,15 +378,22 @@ def _wrappedOpen(file, mode=None):
 @contextlib.contextmanager
 def no_intercept_os():
   "Contextmanager to temporarily suspend the OS interception checks"
-  _orig = _fake_system_env.passthrough 
-  _fake_system_env.passthrough = True
-  yield
-  _fake_system_env.passthrough = _orig
+  with _fake_system_env.current.suspend():
+    yield
 
+class _undo_fake_system_env(object):
+  """Created from a fake env, context manager to suspend behaviour"""
+  def __init__(self, original):
+    self._orig = original
+
+  def __enter__(self):
+    self._orig.__exit__(None,None,None)
+
+  def __exit__(self, *args):
+    self._orig.__enter__()
 
 class _fake_system_env(object):
-  passthrough = False
-
+  current = None
   def __init__(self, env):
     # self._os = {}
     # self._ospath = {}
@@ -400,7 +407,14 @@ class _fake_system_env(object):
     sys: {"platform"}
   }
 
+  def suspend(self):
+    return _undo_fake_system_env(self)
+
   def __enter__(self):
+    assert _fake_system_env.current is None
+    # print("Entering fake env")
+    # traceback.print_stack()
+    _fake_system_env.current = self
     for module, names in self._to_rewrite.items():
       for name in names:
         self._orig[module][name] = getattr(module, name)
@@ -420,9 +434,12 @@ class _fake_system_env(object):
 
 
   def __exit__ (self, type, value, tb):
+    # print("Exiting fake env")
+    # traceback.print_stack()
     for module, entries in self._orig.items():
       for name, value in entries.items():
         setattr(module, name, value)
+    _fake_system_env.current = None
 
   _fake_name = "posix"
   _fake_platform = "linux2"
@@ -445,23 +462,43 @@ class _fake_system_env(object):
     return True
 
   def _fake_isfile(self, file):
-    if not _fake_system_env.passthrough:
-      print("IS FILE: {}".format(file))
-      traceback.print_stack()
-      return self._orig[os.path]["isfile"](file)
+    # Looking for ccp4io printf rewriting...
+    if file.startswith("DISTPATH/ccp4io/libccp4/ccp4"):
+      return False
+
+    print("IS FILE: {}".format(file))
+    traceback.print_stack()
+
+    if "cbf_ws.c" in file:
+      import pdb
+      pdb.set_trace()
+
+    with self.suspend():
+      # If given a special location, try to find it
+      if file.startswith("DISTPATH["):
+        module = file[9:file.find("]")]
+        # Find this module in our distpath
+        for repo in [".", "cctbx_project"]:
+          path = os.path.join(self.env.dist_path, repo, module)      
+          if os.path.isdir(path):
+            file = path + file[len(module)+10:]
+      elif file.startswith("DISTPATH"):
+        file = os.path.join(self.env.dist_path, file[9:])
+      print("Out: {}".format(file))
+
+      if os.path.isfile(file):
+        print("  YES")
+        return True
+      else:
+        print("  NO")
+        return False
+      return os.path.isfile(file)
 
 
   def _fake_exists(self, path):
-    if not _fake_system_env.passthrough:  
-      print("EXISTS: {}".format(path))
-      traceback.print_stack()
+    print("EXISTS: {}".format(path))
+    traceback.print_stack()
     return self._orig[os.path]["exists"](path)  
-
-
-# @contextlib.contextmanager
-# def do_os_patching():
-#   with monkeypatched(os, "mkdir", _fake_mkdir):
-#     yield
 
 class SconsEmulator(object):
   def __init__(self, dist):#, modules):
@@ -485,7 +522,10 @@ class SconsEmulator(object):
       print("No Sconscript for module {}".format(module.name))
       return
     print "Parsing {}".format(module.name)  
-    self.parse_sconscript(scons)
+    
+    self._fake_env = _fake_system_env(self)
+    with self._fake_env:
+      self.parse_sconscript(scons)
 
   def sconscript_command(self, name, exports=None):
     newpath = os.path.join(os.path.dirname(self._current_sconscript), name)
@@ -537,6 +577,5 @@ class SconsEmulator(object):
     prev_scons = self._current_sconscript
     self._current_sconscript = filename
     # Now execute the script
-    with _fake_system_env(self):
-      module.execute()
+    module.execute()
     self._current_sconscript = prev_scons
