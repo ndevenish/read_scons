@@ -64,16 +64,27 @@ class EasyRunResult(object):
 
 def _tbx_easyrun_fully_buffered(command, **kwargs):
   """Check what the caller was trying to run, and return pretend data"""
-  if command == "/usr/bin/uname -p":
-    return EasyRunResult(["i386"])
-  elif command == "/usr/bin/sw_vers -productVersion":
-    return EasyRunResult(["10.12.0"])
-  elif command == "nvcc --version":
+  # if command == "/usr/bin/uname -p":
+  #   return EasyRunResult(["i386"])
+  # elif command == "/usr/bin/sw_vers -productVersion":
+  #   return EasyRunResult(["10.12.0"])
+  if command == "nvcc --version":
     return EasyRunResult(["Cuda compilation tools, release 8.0, V8.0.61"])
   assert False, "No command known; {}".format(command)
 
 # Only allow this to be done once, until we may add e.g. context-patching
 _patching_done = False
+
+def _get_gcc_version_50400(*args, **kwargs):
+  return 50400
+
+# getenv_bool(variable_name="LIBTBX_CPP0X", default=None)
+def _getenv_bool(variable_name, default=False):
+  results = {
+    "LIBTBX_CPP0X": False, # Should we add a c++0x flag
+  }
+  assert variable_name in results, "Unknown getenv_bool {}".format(variable_name)
+  return results[variable_name]
 
 def do_import_patching():
   # Only do this once
@@ -90,7 +101,7 @@ def do_import_patching():
   libtbx.path = new_module("libtbx.path")
 
   libtbx.manual_date_stamp = 20090819 # I don't even
-  libtbx.utils.getenv_bool = _fail
+  libtbx.utils.getenv_bool = _getenv_bool
   libtbx.str_utils.show_string = _fail
   libtbx.path.norm_join = lambda a,b: os.path.normpath(os.path.join(a,b))
   libtbx.path.full_command_path = _fail
@@ -101,6 +112,8 @@ def do_import_patching():
   libtbx.env_config.python_include_path = lambda: "PYTHON/INCLUDE/PATH"
   libtbx.env_config.unique_paths = _unique_paths
   libtbx.env_config.darwin_shlinkcom = _tbx_darwin_shlinkcom
+  libtbx.env_config.get_gcc_version = _get_gcc_version_50400
+# def get_gcc_version(command_name="gcc"):
 
   libtbx.utils.select_matching = _libtbx_select_matching
   libtbx.utils.warn_if_unexpected_md5_hexdigest = Mock()

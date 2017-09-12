@@ -42,6 +42,8 @@ class libtbxBuildOptions(object):
   boost_python_bool_int_strict = True # Undocumented in boost::python and whether
                                       # anything depends on this is long lost.... but
                                       # since it's just a define keep in for parsing scons
+  mode = "invalid" # AFAICT this is only tested as mode == "profile" (linux only)
+  static_libraries = False
 
 class libtbxEnv(object):
   boost_version = 106500

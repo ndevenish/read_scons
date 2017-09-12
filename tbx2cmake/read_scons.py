@@ -287,7 +287,9 @@ def read_distribution(module_path):
   assert all(x.prefix == "lib" for x in tbx.targets if x.type == Target.Type.STATIC)
   assert all(x.prefix == "" for x in tbx.targets if x.type == Target.Type.MODULE)
   assert all(not x.shared_sources for x in tbx.targets), "Shared sources exists - all should be filtered"
-
+  # assert all("GLU" in x.extra_libs for x in tbx.targets if "GL" in x.extra_libs), "Not all GLU has GL"
+  # assert all("GL" in x.extra_libs for x in tbx.targets if "GLU" in x.extra_libs), "Not all GL has GLU"
+  
   # For all targets named directly after a module, ensure it's in the module root
   assert all([x.origin_path == tbx.modules[x.name].path for x in tbx.targets if x.name in tbx.modules])
 
@@ -299,7 +301,7 @@ def read_distribution(module_path):
   logger.info("{} Targets remaining".format(len(tbx.targets)))
 
   # Check that we know and expect all the external libraries
-  assert external_libs == {"tiff", "boost_python"}, "Unexpected extra external libs in: {}".format(external_libs)
+  assert external_libs == {"tiff", "boost_python", "GL", "GLU"}, "Unexpected extra external libs in: {}".format(external_libs)
   
   return tbx
 

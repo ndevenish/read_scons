@@ -39,14 +39,15 @@ class SConsConfigurationContext(object):
     self.env = env
 
   def TryRun(self, code, **kwargs):
-    if "__GNUC_PATCHLEVEL__" in code:
-      # We are trying to extract compiler information. Just return constant and
-      # we can change it later if this fucks up something.
-      data = {"llvm":1, "clang":1, "clang_major":8, "clang_minor":1, 
-              "clang_patchlevel":0, "GNUC":4, "GNUC_MINOR":2, 
-              "GNUC_PATCHLEVEL":1, "clang_version": "8.1.0 (clang-802.0.42)", 
-              "VERSION": "4.2.1 Compatible Apple LLVM 8.1.0 (clang-802.0.42)"}
-      return (1, repr(data))
+    # Only for darwin; now we fake linux
+    # if "__GNUC_PATCHLEVEL__" in code:
+    #   # We are trying to extract compiler information. Just return constant and
+    #   # we can change it later if this fucks up something.
+    #   data = {"llvm":1, "clang":1, "clang_major":8, "clang_minor":1, 
+    #           "clang_patchlevel":0, "GNUC":4, "GNUC_MINOR":2, 
+    #           "GNUC_PATCHLEVEL":1, "clang_version": "8.1.0 (clang-802.0.42)", 
+    #           "VERSION": "4.2.1 Compatible Apple LLVM 8.1.0 (clang-802.0.42)"}
+    #   return (1, repr(data))
 
     # Get the name of the calling function
     with no_intercept_os():
@@ -70,18 +71,20 @@ class SConsConfigurationContext(object):
     # Assume this is long past and we no longer need the workaround. (certainly
     # anyone using clang is probably using something much more modern than our
     # average supported GCC installation)
-    if code == """\
-      #include <boost/thread.hpp>
+    # if code == """\
+    #   #include <boost/thread.hpp>
 
-      struct callable { void operator()(){} };
-      void whatever() {
-        callable f;
-        boost::thread t(f);
-      }
-      """:
-      return 1
+    #   struct callable { void operator()(){} };
+    #   void whatever() {
+    #     callable f;
+    #     boost::thread t(f);
+    #   }
+    #   """:
+    #   return 1
+
+
     # This appears.... to test that a compiler actually works.
-    elif code == "#include <iostream>":
+    if code == "#include <iostream>":
       return 1
     # Is Python available?
     elif code == "#include <Python.h>":
@@ -186,6 +189,9 @@ class SConsEnvironment(object):
       return self._DEFAULT_KWARGS[key]
     return self.kwargs[key]
 
+  def has_key(self, key):
+    return key in self.kwargs or key in self._DEFAULT_KWARGS
+
   def Repository(self, path):
     if path == "DISTPATH":
       return
@@ -222,14 +228,13 @@ class SConsEnvironment(object):
 
     # Handle frameworks from this
     linkflags = list(self["SHLINKFLAGS"])
-    while "-fopenmp" in linkflags:
-      linkflags.remove("-fopenmp")
-    while "-framework" in linkflags:
-      index = linkflags.index("-framework")
-      target.extra_libs += linkflags[index+1]
-      linkflags.pop(index+1)
-      linkflags.pop(index)
-    print("Unhandled link flags: ", linkflags)
+    known_ignore_flags = {"-fopenmp", "-shared", "-rdynamic"}
+    for flag in known_ignore_flags:
+      while flag in linkflags:
+        linkflags.remove(flag)
+    assert not linkflags, "Unknown link flag: {}".format(linkflags)
+    if linkflags:
+      print("Unhandled link flags: ", linkflags)
 
     if targettype == Target.Type.SHARED:
       target.prefix = self["SHLIBPREFIX"]
@@ -421,14 +426,14 @@ class _fake_system_env(object):
     if not _fake_system_env.passthrough:
       print("IS FILE: {}".format(file))
       traceback.print_stack()
-      return self._ospath["isfile"](file)
+      return self._orig[os.path]["isfile"](file)
 
 
   def _fake_exists(self, path):
     if not _fake_system_env.passthrough:  
       print("EXISTS: {}".format(path))
       traceback.print_stack()
-    return self._ospath["exists"](path)  
+    return self._orig[os.path]["exists"](path)  
 
 
 # @contextlib.contextmanager
