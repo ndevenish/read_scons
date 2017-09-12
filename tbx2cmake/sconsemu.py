@@ -280,6 +280,7 @@ class Target(object):
     # self.output_name = output_name
     self.sources = [x for x in sources if not isinstance(x, SharedObject)]
     self.shared_sources = [x for x in sources if isinstance(x, SharedObject)]
+    self.generated_sources = set()
     self.extra_libs = set()
     self.prefix = ""
     # The path the target was "created" from
