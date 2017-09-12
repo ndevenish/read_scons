@@ -388,11 +388,12 @@ def no_intercept_os():
 
 class _fake_system_env(object):
   passthrough = False
-  def __init__(self):
+
+  def __init__(self, env):
     # self._os = {}
     # self._ospath = {}
     # self._sys = {}
-
+    self.env = env
     self._orig = defaultdict(dict)
 
   _to_rewrite = {
@@ -538,6 +539,6 @@ class SconsEmulator(object):
     prev_scons = self._current_sconscript
     self._current_sconscript = filename
     # Now execute the script
-    with _fake_system_env():
+    with _fake_system_env(self):
       module.execute()
     self._current_sconscript = prev_scons
