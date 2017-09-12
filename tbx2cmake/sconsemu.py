@@ -194,9 +194,7 @@ class SConsEnvironment(object):
     return key in self.kwargs or key in self._DEFAULT_KWARGS
 
   def Repository(self, path):
-    if path == "DISTPATH":
-      return
-    assert False, "Unknown Repository usage: {}".format(path)
+    self.Append(REPOSITORIES=path)
 
   def SConscript(self, name, exports=None):
     """Sometimes, sub-SConscripts are called from an environment. Appears to behave the same."""
