@@ -209,9 +209,12 @@ class SConsEnvironment(object):
     target = Target(targettype, output_name=target, sources=source)
     target.origin_path = os.path.dirname(os.path.relpath(self.runner._current_sconscript, self.runner.dist_path))
 
+    target.env = self.Clone()
+    target.env.Append(**kwargs)
+
     # Massage lib list to flatten any odd sublists etc
     libs = set()
-    for lib in self["LIBS"]:
+    for lib in target.env["LIBS"]:
       if isinstance(lib, basestring):
         libs.add(lib)
       elif isinstance(lib, list):
@@ -226,7 +229,7 @@ class SConsEnvironment(object):
     target.extra_libs = libs
 
     # Handle link flags
-    linkflags = list(self["SHLINKFLAGS"])
+    linkflags = list(target.env["SHLINKFLAGS"])
     known_ignore_flags = {"-fopenmp", "-shared", "-rdynamic"}
     for flag in known_ignore_flags:
       while flag in linkflags:
@@ -238,7 +241,7 @@ class SConsEnvironment(object):
     # Handle include directories.
     # import pdb
     # pdb.set_trace()
-    if "CPPPATH" in self.kwargs:
+    if "CPPPATH" in target.env.kwargs:
       # Remove things we expect
       COMMON_INCLUDES = {
         ".", 
@@ -249,14 +252,14 @@ class SConsEnvironment(object):
         "REPOSITORIES",
         "BASEDIR/include"
         }
-      extra_paths = set(self["CPPPATH"]) - COMMON_INCLUDES
+      extra_paths = set(target.env["CPPPATH"]) - COMMON_INCLUDES
       if extra_paths:
         print ("Path: {}".format(sorted(extra_paths)))
 
     if targettype == Target.Type.SHARED:
-      target.prefix = self["SHLIBPREFIX"]
+      target.prefix = target.env["SHLIBPREFIX"]
     elif targettype == Target.Type.STATIC:
-      target.prefix = self["LIBPREFIX"]
+      target.prefix = target.env["LIBPREFIX"]
 
     target.module = self.runner._current_module
     target.module.targets.append(target)
