@@ -369,7 +369,8 @@ def _target_rename(name):
     "boost_python": "Boost::python",
     "tiff": "TIFF::TIFF",
     "GL": "OpenGL::GL",
-    "GLU": "OpenGL::GLU"
+    "GLU": "OpenGL::GLU",
+    "boost_thread": "Boost::thread"
   }
   return dependency_renames.get(name, name)
 
