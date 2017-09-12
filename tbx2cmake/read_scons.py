@@ -264,7 +264,6 @@ def read_distribution(module_path):
     tbx.targets.remove(target)
   # for target in [x for x in tbx.targets:
 
-
   # Remove any modules without targets (these might not even be real modules)
   for module in [x.name for x in tbx.modules.values() if not x.targets]:
     del tbx.modules[module]

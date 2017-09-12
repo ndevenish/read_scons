@@ -115,7 +115,7 @@ class CMakeLists(object):
     if self.subdirectories:
       blocks.append(CMLSubDirBlock(self))
 
-    return "\n\n".join(str(x) for x in blocks)
+    return "\n\n".join(str(x) for x in blocks) + "\n"
 
 class CMakeListBlock(object):
   def __init__(self, cmakelist):
@@ -127,6 +127,16 @@ class CMLSubDirBlock(CMakeListBlock):
     for subdir in sorted(self.cml.subdirectories):
       lines.append("add_subdirectory({})".format(subdir))
     return "\n".join(lines)
+
+def _expand_include_path(path):
+  assert not path.startswith("!")
+  if path.startswith("#base"):
+    path = path.replace("#base", "${CMAKE_SOURCE_DIR}")
+  elif path.startswith("#build"):
+    path = path.replace("#build", "${CMAKE_BINARY_DIR}")
+  else:
+    path = "${CMAKE_CURRENT_SOURCE_DIR}/" + path
+  return path
 
 class CMLModuleRootBlock(CMakeListBlock):
   def __str__(self):
@@ -145,15 +155,11 @@ class CMLModuleRootBlock(CMakeListBlock):
       # We're just an interface library
       lines.append("add_library( {} INTERFACE )".format(module.name))
       include_paths = {"${CMAKE_CURRENT_SOURCE_DIR}/.."}
+      
       # Handle any replacements in this path
       for path in module.include_paths:
         assert not path.startswith("!"), "No private includes for interface libraries"
-        if path.startswith("#base"):
-          path = path.replace("#base", "${CMAKE_SOURCE_DIR}")
-        elif path.startswith("#build"):
-          path = path.replace("#build", "${CMAKE_BINARY_DIR}")
-        else:
-          path = "${CMAKE_CURRENT_SOURCE_DIR}/" + path
+        path = _expand_include_path(path)
         include_paths.add(path)
       linepre = "target_include_directories( {} INTERFACE ".format(module.name)
 
@@ -175,7 +181,7 @@ class CMLModuleRootBlock(CMakeListBlock):
 
     return "\n".join(lines)
 
-def _append_list_to(line, list, join=" ", indent=4, append=("","")):
+def _append_list_to(line, list, join=" ", indent=4, append=("",""), firstindent=None):
   """
   Appends a list to a line, either inline or as separate lines depending on length.
 
@@ -183,11 +189,14 @@ def _append_list_to(line, list, join=" ", indent=4, append=("","")):
   :param indent: How far to indent if using separate lines
   :param append: What to append. A tuple of (inline, split) postfixes
   """
+  if firstindent is None:
+    firstindent = " " * indent
+
   if len(line + join.join(list)) + 2 <= 78:
     return line + join.join(list) + append[0]
   else:
     joiner = join.strip() + "\n" + " "*indent
-    return line + "\n" + " "*indent + joiner.join(list) + append[1]
+    return line + "\n" + firstindent + joiner.join(list) + append[1]
 
 class CMLLibraryOutput(CMakeListBlock):
   def __init__(self, target):
@@ -237,6 +246,28 @@ class CMLLibraryOutput(CMakeListBlock):
     if self.target.generated_sources:
       addgen = "add_generated_sources( {} ".format(self.target.name)
       lines.append(_append_list_to(addgen, self.target.generated_sources, append=(" )", " )")))
+
+    # If we have custom include directories, add them now
+    if self.target.include_paths:
+      include_public = []
+      include_private = []
+      for path in self.target.include_paths:
+        pathtype = include_public
+        if path.startswith("!"):
+          path = path[1:]
+          pathtype = include_private
+        
+        path = _expand_include_path(path)
+        pathtype.append(path)
+
+      inclines = ["target_include_directories( {} ".format(self.target.name)]
+      if include_public:
+        inclines.append("    PUBLIC  " + "\n            ".join(include_public))
+      if include_private:
+        inclines.append("    PRIVATE " + "\n            ".join(include_private))
+        # inclines.append(_append_list_to("    PRIVATE ", include_private))
+      lines.append("\n".join(inclines) + " )")
+
     extra_libs = self.target.extra_libs
     if self.is_python_module:
       extra_libs = extra_libs - {"boost_python"}
