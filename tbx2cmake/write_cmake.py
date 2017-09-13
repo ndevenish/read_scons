@@ -34,6 +34,12 @@ DEPENDENCY_RENAMES = {
   "boost": "Boost::boost",
   "eigen": "Eigen::Eigen",
 }
+
+# Optional dependencies
+OPTIONAL_DEPENDS = {
+  "boost_thread"
+}
+
 class CMakeLists(object):
   "Represents a single CMakeLists file. Keeps track of subdirectories."
   
@@ -284,6 +290,19 @@ class CMLLibraryOutput(CMakeListBlock):
       extra_libs = extra_libs - {"boost_python"}
     if extra_libs:
       lines.append("target_link_libraries( {} {} )".format(self.target.name, " ".join(_target_rename(x) for x in extra_libs)))
+
+    # Handle any optional dependencies
+    optionals = OPTIONAL_DEPENDS & set(extra_libs)
+    if optionals:
+      # Ensure we have properly split lines before indenting
+      lines = "\n".join(lines).splitlines()
+      # cond_lines = []
+      conditions = " AND ".join(("TARGET {}".format(_target_rename(x)) for x in optionals))
+      cond_lines = ["if({})".format(conditions)]
+      cond_lines.extend("  " + x for x in lines)
+      cond_lines.append("endif()")
+      lines = cond_lines
+      # 
 
     return "\n".join(lines)
 
