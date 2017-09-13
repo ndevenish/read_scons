@@ -12,5 +12,6 @@ setup(
           'tbx2depfile=tbx2cmake.read_scons:main',
           'tbx2cmake=tbx2cmake.write_cmake:main'
         ],
-    }
+    },
+    install_requires=["enum35", "docopt", "networkx"],
 )
