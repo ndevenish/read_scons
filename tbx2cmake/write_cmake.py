@@ -23,6 +23,17 @@ from .sconsemu import Target
 
 logger = logging.getLogger()
 
+# Renames from Scons-library targets to CMake names
+DEPENDENCY_RENAMES = {
+  "boost_python": "Boost::python",
+  "tiff": "TIFF::TIFF",
+  "GL": "OpenGL::GL",
+  "GLU": "OpenGL::GLU",
+  "boost_thread": "Boost::thread",
+  "hdf5_c": "HDF5::C",
+  "boost": "Boost::boost",
+  "eigen": "Eigen::Eigen",
+}
 class CMakeLists(object):
   "Represents a single CMakeLists file. Keeps track of subdirectories."
   
@@ -365,17 +376,7 @@ def read_autogen_information(filename, tbx):
 
 def _target_rename(name):
   "Renames a target to the CMake target name, if required"
-  dependency_renames = {
-    "boost_python": "Boost::python",
-    "tiff": "TIFF::TIFF",
-    "GL": "OpenGL::GL",
-    "GLU": "OpenGL::GLU",
-    "boost_thread": "Boost::thread",
-    "hdf5_c": "HDF5::C",
-    "boost": "Boost::boost",
-    "eigen": "Eigen::Eigen",
-  }
-  return dependency_renames.get(name, name)
+  return DEPENDENCY_RENAMES.get(name, name)
 
 def main():
   logging.basicConfig(level=logging.INFO)
