@@ -288,6 +288,8 @@ class CMLLibraryOutput(CMakeListBlock):
     extra_libs = self.target.extra_libs
     if self.is_python_module:
       extra_libs = extra_libs - {"boost_python"}
+    else:
+      extra_libs |= {"boost"}
     if extra_libs:
       lines.append("target_link_libraries( {} {} )".format(self.target.name, " ".join(_target_rename(x) for x in extra_libs)))
 
