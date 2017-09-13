@@ -37,7 +37,7 @@ DEPENDENCY_RENAMES = {
 
 # Optional dependencies
 OPTIONAL_DEPENDS = {
-  "boost_thread"
+  "boost_thread", "GL", "GLU"
 }
 
 class CMakeLists(object):
