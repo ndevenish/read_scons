@@ -13,5 +13,5 @@ setup(
           'tbx2cmake=tbx2cmake.write_cmake:main'
         ],
     },
-    install_requires=["enum35", "docopt", "networkx"],
+    install_requires=["enum34", "docopt", "networkx"],
 )
