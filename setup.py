@@ -13,5 +13,5 @@ setup(
           'tbx2cmake=tbx2cmake.write_cmake:main'
         ],
     },
-    install_requires=["enum34", "docopt", "networkx", "pyyaml", "mock"],
+    install_requires=["enum34", "docopt", "networkx<2", "pyyaml", "mock"],
 )
