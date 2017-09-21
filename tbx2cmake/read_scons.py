@@ -203,7 +203,7 @@ def read_module_path_sconscripts(module_path):
 
   # Find an order of processing that satisfies dependencies
   G = _build_dependency_graph(modules.values())
-  node_order = nx.topological_sort(G, reverse=True, nbunch=sorted(G.nodes()))
+  node_order = list(reversed(list(nx.lexicographical_topological_sort(G))))
   logger.debug("Dependency processing order: {}".format(node_order))
 
   # Prepare the SCons emulator
